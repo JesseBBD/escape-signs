@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pi IR Remote</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --text: #ecedef;
+      --muted: #9aa3b2;
+      --accent: #4f8cff;
+      --ok: #1db954;
+      --warn: #f2b705;
+      --bad: #ff4d4f;
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; 
+      background: radial-gradient(1200px 800px at 10% -10%, #1a1f2b, transparent), var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: grid; place-items: start center;
+      padding: 24px;
+    }
+
+    .app { width: 100%; max-width: 860px; display: grid; gap: 16px; }
+
+    header, section, footer {
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: var(--radius);
+      padding: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+    .title { font-weight: 700; letter-spacing: 0.3px; }
+    .muted { color: var(--muted); font-size: 0.9rem; }
+
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .grow { flex: 1 1 240px; }
+
+    input[type="text"], input[type="password"], select {
+      width: 100%;
+      background: #0d1016; border: 1px solid rgba(255,255,255,0.08); color: var(--text);
+      border-radius: 12px; padding: 12px 14px; outline: none; font-size: 0.95rem;
+    }
+
+    button {
+      background: #121620; color: var(--text); border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px; padding: 10px 14px; cursor: pointer; font-weight: 600;
+      transition: transform .03s ease, background .2s ease, border-color .2s ease;
+      user-select: none;
+    }
+    button:hover { background: #141a27; }
+    button:active { transform: translateY(1px); }
+    .btn-accent { border-color: rgba(79,140,255,0.5); box-shadow: inset 0 0 0 1px rgba(79,140,255,0.2); }
+
+    .status {
+      display: inline-flex; align-items: center; gap: 8px; font-size: 0.95rem;
+      padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.08);
+      background: #0d1016;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 999px; background: var(--warn); box-shadow: 0 0 10px currentColor; }
+
+    .controls {
+      display: grid; gap: 16px; grid-template-columns: 1fr; 
+    }
+
+    .picker {
+      display: grid; grid-template-columns: 220px 1fr; gap: 16px; align-items: center;
+    }
+    @media (max-width: 720px) {
+      .picker { grid-template-columns: 1fr; }
+    }
+
+    .color-preview {
+      width: 100%; aspect-ratio: 1/1; border-radius: 16px; border: 1px solid rgba(255,255,255,0.12);
+      background: conic-gradient(from 210deg, #fff, #fff);
+      display: grid; place-items: center; font-weight: 700; color: #111;
+      text-shadow: 0 1px 0 rgba(255,255,255,0.4);
+    }
+
+    .swatches {
+      display: grid; grid-template-columns: repeat(8, minmax(40px, 1fr)); gap: 10px;
+    }
+    @media (max-width: 520px) {
+      .swatches { grid-template-columns: repeat(6, minmax(40px, 1fr)); }
+    }
+
+    .swatch {
+      aspect-ratio: 1/1; border-radius: 12px; border: 1px solid rgba(255,255,255,0.18);
+      display: grid; place-items: center; font-size: 0.75rem; font-weight: 700;
+      filter: saturate(1.1);
+    }
+
+    .modes, .power { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    @media (max-width: 520px) {
+      .modes, .power { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    .hint { font-size: 0.9rem; color: var(--muted); }
+    footer { text-align: center; font-size: 0.9rem; color: var(--muted); }
+
+    .range-row { display: grid; gap: 10px; grid-template-columns: 130px 1fr 80px; align-items: center; }
+    input[type="range"] { width: 100%; }
+
+    .toast { position: fixed; bottom: 16px; right: 16px; padding: 10px 12px; background: #0d1016; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; opacity: 0; transform: translateY(10px); transition: .2s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <div class="title">Pi IR Remote</div>
+        <div class="muted">Send color commands from your browser to your Raspberry Pi IR blaster</div>
+      </div>
+      <div class="status" id="status"><span class="dot" id="dot"></span><span id="statusText">Not connected</span></div>
+    </header>
+
+    <section>
+      <div class="row">
+        <div class="grow">
+          <label class="muted">Pi Base URL</label>
+          <input id="baseUrl" type="text" placeholder="http://raspberrypi.local:8000" />
+        </div>
+        <div>
+          <label class="muted">Auth Token (optional)</label>
+          <input id="authToken" type="password" placeholder="paste token" />
+        </div>
+        <div>
+          <label class="muted">&nbsp;</label>
+          <button id="saveBtn" class="btn-accent">Save</button>
+        </div>
+        <div>
+          <label class="muted">&nbsp;</label>
+          <button id="pingBtn">Ping</button>
+        </div>
+      </div>
+      <div class="hint" style="margin-top:8px">Tip: host this page anywhere (even locally). Your Pi must allow CORS from this origin.</div>
+    </section>
+
+    <section class="controls">
+      <div class="picker">
+        <div>
+          <div class="color-preview" id="preview">#FFFFFF</div>
+        </div>
+        <div>
+          <div class="row" style="align-items:center; gap: 16px">
+            <div class="grow">
+              <label class="muted">Pick a color</label>
+              <input id="colorPicker" type="color" value="#ffffff" style="width:100%; height: 48px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.12); background:#0d1016;" />
+            </div>
+            <div>
+              <label class="muted">Send</label>
+              <button id="sendColorBtn">Send</button>
+            </div>
+          </div>
+
+          <div style="margin-top: 16px" class="range-row">
+            <div class="muted">Brightness</div>
+            <input id="brightness" type="range" min="0" max="100" value="100" />
+            <div id="brightnessVal">100%</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="muted" style="margin-bottom:8px">Quick colors</div>
+        <div class="swatches" id="swatches"></div>
+      </div>
+
+      <div>
+        <div class="muted" style="margin-bottom:8px">Modes</div>
+        <div class="modes">
+          <button data-mode="flash">Flash</button>
+          <button data-mode="strobe">Strobe</button>
+          <button data-mode="fade">Fade</button>
+          <button data-mode="smooth">Smooth</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="muted" style="margin-bottom:8px">Power</div>
+        <div class="power">
+          <button id="btnOn" style="border-color: rgba(29,185,84,0.5)">On</button>
+          <button id="btnOff" style="border-color: rgba(255,77,79,0.5)">Off</button>
+          <button id="btnWhite">White</button>
+          <button id="btnWarm">Warm White</button>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      Built for local control. <span class="hint">Open this on your phone, save the URL once, and tap colors like a remote.</span>
+    </footer>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // --- Utilities ---
+    const $ = (sel) => document.querySelector(sel);
+    const preview = $('#preview');
+    const colorPicker = $('#colorPicker');
+    const brightness = $('#brightness');
+    const brightnessVal = $('#brightnessVal');
+    const swatches = $('#swatches');
+    const statusText = $('#statusText');
+    const dot = $('#dot');
+
+    const toast = (msg) => {
+      const el = document.getElementById('toast');
+      el.textContent = msg; el.classList.add('show');
+      setTimeout(() => el.classList.remove('show'), 1800);
+    };
+
+    const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+
+    function hexToRgb(hex) {
+      const s = hex.replace('#','');
+      const bigint = parseInt(s, 16);
+      const r = (bigint >> 16) & 255;
+      const g = (bigint >> 8) & 255;
+      const b = bigint & 255;
+      return { r, g, b };
+    }
+
+    const setPreview = (hex) => {
+      preview.style.background = hex;
+      preview.textContent = hex.toUpperCase();
+      const rgb = hexToRgb(hex);
+      const lum = (0.299*rgb.r + 0.587*rgb.g + 0.114*rgb.b)/255;
+      preview.style.color = lum > 0.6 ? '#111' : '#fff';
+      preview.style.textShadow = lum > 0.6 ? '0 1px 0 rgba(0,0,0,0.25)' : '0 1px 0 rgba(255,255,255,0.25)';
+    };
+
+    // --- Persistence ---
+    const STORAGE_KEY = 'pi-ir-remote';
+    function getConfig() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
+    }
+    function setConfig(cfg) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+    }
+
+    // --- Network ---
+    function baseUrl() { return document.getElementById('baseUrl').value.trim(); }
+
+    async function request(path, body) {
+      const url = baseUrl();
+      if (!url) throw new Error('Base URL is empty');
+      const token = document.getElementById('authToken').value.trim();
+      const res = await fetch(url.replace(/\/$/, '') + path, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(body),
+        mode: 'cors',
+        keepalive: true,
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(()=>res.statusText);
+        throw new Error(`HTTP ${res.status}: ${t}`);
+      }
+      return res.json().catch(() => ({}));
+    }
+
+    async function sendColor(hex) {
+      const { r, g, b } = hexToRgb(hex);
+      const bPct = clamp(parseInt(brightness.value, 10), 0, 100);
+      const payload = { r, g, b, brightness: bPct };
+      const data = await request('/color', payload);
+      return data;
+    }
+
+    async function sendCommand(name) {
+      const data = await request('/command', { name });
+      return data;
+    }
+
+    async function sendPower(state) {
+      const data = await request('/power', { state });
+      return data;
+    }
+
+    async function ping() {
+      const url = baseUrl();
+      if (!url) return setStatus('Not connected', 'warn');
+      try {
+        const res = await fetch(url.replace(/\/$/, '') + '/health', { mode: 'cors' });
+        if (res.ok) setStatus('Connected', 'ok'); else setStatus('Unreachable', 'bad');
+      } catch {
+        setStatus('Unreachable', 'bad');
+      }
+    }
+
+    function setStatus(msg, level='warn') {
+      statusText.textContent = msg;
+      dot.style.background = level === 'ok' ? 'var(--ok)' : level === 'bad' ? 'var(--bad)' : 'var(--warn)';
+    }
+
+    // --- Debounce for color dragging ---
+    function debounce(fn, ms) {
+      let t; return function(...args){ clearTimeout(t); t = setTimeout(()=>fn.apply(this, args), ms); };
+    }
+
+    const debouncedSend = debounce(async (hex) => {
+      try { await sendColor(hex); setStatus('Connected', 'ok'); }
+      catch (e) { console.error(e); setStatus('Error', 'bad'); toast('Send failed'); }
+    }, 120);
+
+    // --- Init ---
+    const defaultColors = [
+      ['Red', '#ff0000'], ['Green', '#00ff00'], ['Blue', '#0000ff'], ['Yellow', '#ffff00'],
+      ['Orange', '#ff7a00'], ['Purple', '#8000ff'], ['Pink', '#ff33aa'], ['Cyan', '#00ffff'],
+      ['White', '#ffffff'], ['Warm', '#fff3d1'], ['Cool', '#e7f1ff'], ['Lime', '#bfff00'],
+      ['Teal', '#15c2b8'], ['Magenta', '#ff00ff'], ['Amber', '#ffbf00'], ['Indigo', '#3f51b5'],
+    ];
+
+    function buildSwatches() {
+      for (const [name, hex] of defaultColors) {
+        const btn = document.createElement('button');
+        btn.className = 'swatch';
+        btn.title = name;
+        btn.dataset.hex = hex;
+        btn.style.background = hex;
+        btn.textContent = ' ';
+        btn.addEventListener('click', async () => {
+          colorPicker.value = hex; setPreview(hex);
+          try { await sendColor(hex); setStatus('Connected', 'ok'); toast(`${name}`); }
+          catch { setStatus('Error', 'bad'); toast('Send failed'); }
+        });
+        swatches.appendChild(btn);
+      }
+    }
+
+    function loadSaved() {
+      const cfg = getConfig();
+      document.getElementById('baseUrl').value = cfg.baseUrl || 'http://raspberrypi.local:8000';
+      document.getElementById('authToken').value = cfg.authToken || '';
+    }
+
+    function save() {
+      setConfig({ baseUrl: baseUrl(), authToken: document.getElementById('authToken').value.trim() });
+      toast('Saved'); ping();
+    }
+
+    // Event wiring
+    document.getElementById('saveBtn').addEventListener('click', save);
+    document.getElementById('pingBtn').addEventListener('click', ping);
+
+    document.getElementById('sendColorBtn').addEventListener('click', async () => {
+      const hex = colorPicker.value; setPreview(hex);
+      try { await sendColor(hex); setStatus('Connected', 'ok'); toast('Color sent'); }
+      catch { setStatus('Error', 'bad'); toast('Send failed'); }
+    });
+
+    colorPicker.addEventListener('input', () => {
+      const hex = colorPicker.value; setPreview(hex); debouncedSend(hex);
+    });
+
+    brightness.addEventListener('input', () => {
+      brightnessVal.textContent = `${brightness.value}%`;
+      debouncedSend(colorPicker.value);
+    });
+
+    document.querySelectorAll('.modes button').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try { await sendCommand(btn.dataset.mode); setStatus('Connected', 'ok'); toast(`${btn.dataset.mode} mode`); }
+        catch { setStatus('Error', 'bad'); toast('Send failed'); }
+      });
+    });
+
+    document.getElementById('btnOn').addEventListener('click', async ()=>{
+      try { await sendPower('on'); setStatus('Connected', 'ok'); toast('Power ON'); }
+      catch { setStatus('Error', 'bad'); toast('Send failed'); }
+    });
+    document.getElementById('btnOff').addEventListener('click', async ()=>{
+      try { await sendPower('off'); setStatus('Connected', 'ok'); toast('Power OFF'); }
+      catch { setStatus('Error', 'bad'); toast('Send failed'); }
+    });
+    document.getElementById('btnWhite').addEventListener('click', async ()=>{
+      try { await sendCommand('white'); setStatus('Connected', 'ok'); toast('White'); }
+      catch { setStatus('Error', 'bad'); toast('Send failed'); }
+    });
+    document.getElementById('btnWarm').addEventListener('click', async ()=>{
+      try { await sendCommand('warm'); setStatus('Connected', 'ok'); toast('Warm white'); }
+      catch { setStatus('Error', 'bad'); toast('Send failed'); }
+    });
+
+    // Boot
+    buildSwatches();
+    loadSaved();
+    setPreview(colorPicker.value);
+    ping();
+  </script>
+</body>
+</html>
