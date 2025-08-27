@@ -54,7 +54,7 @@ function baseUrl() {
   return document.getElementById("baseUrl").value.trim().replace(/\/+$/, "");
 }
 function apiKey() {
-  // Reuse your existing "authToken" input; we’ll send it as ?key=...
+  // We reuse your "authToken" input; we send it as ?key=...
   return document.getElementById("authToken").value.trim();
 }
 
@@ -64,11 +64,10 @@ async function getJson(url) {
     const t = await res.text().catch(() => res.statusText);
     throw new Error(`HTTP ${res.status}: ${t}`);
   }
-  // health returns JSON; color/ir return JSON too ({"ok":true})
   return res.json().catch(() => ({}));
 }
 
-// Scale r/g/b by brightness% on the client
+// Scale r/g/b by brightness% client-side
 function applyBrightness({ r, g, b }, pct) {
   const f = clamp(pct, 0, 100) / 100;
   return {
@@ -78,7 +77,7 @@ function applyBrightness({ r, g, b }, pct) {
   };
 }
 
-// ESP8266 expects query params on POST; body is unused.
+// Send /color as POST with query params (?r=&g=&b=&key=...)
 async function sendColor(hex) {
   const url = baseUrl();
   if (!url) throw new Error("Base URL is empty");
@@ -105,18 +104,36 @@ async function sendColor(hex) {
   return res.json().catch(() => ({}));
 }
 
-// --- IR command mapping (fill these with your real codes later) ---
-/*
-  Put your learned codes here once you have them (using an IR receiver or known docs).
-  Example:
-  IR_MAP = {
-    power_on:  { proto: "NEC", code: "0x00FFA25D", bits: 32 },
-    power_off: { proto: "NEC", code: "0x00FFE21D", bits: 32 },
-    white:     { proto: "NEC", code: "0x00FF02FD", bits: 32 },
-    warm:      { proto: "NEC", code: "0x00FF22DD", bits: 32 },
-  };
-*/
-let IR_MAP = {};
+// --- IR command mapping ------------------------------
+// PRESET A: Example NEC codes (common on small 21/24-key remotes).
+// These may or may not match your strip controller — try them first.
+// If they don't work, you'll replace with learned codes from your remote.
+const IR_MAP_PRESET_NEC = {
+  power_on: { proto: "NEC", code: "0x00FFA25D", bits: 32 }, // example
+  power_off: { proto: "NEC", code: "0x00FFE21D", bits: 32 }, // example
+  white: { proto: "NEC", code: "0x00FF02FD", bits: 32 }, // example
+  warm: { proto: "NEC", code: "0x00FF22DD", bits: 32 }, // example
+  red: { proto: "NEC", code: "0x00FF9867", bits: 32 }, // example
+  green: { proto: "NEC", code: "0x00FF38C7", bits: 32 }, // example
+  blue: { proto: "NEC", code: "0x00FF18E7", bits: 32 }, // example
+  flash: { proto: "NEC", code: "0x00FFB04F", bits: 32 }, // example
+  strobe: { proto: "NEC", code: "0x00FF6897", bits: 32 }, // example
+  fade: { proto: "NEC", code: "0x00FF30CF", bits: 32 }, // example
+  smooth: { proto: "NEC", code: "0x00FF10EF", bits: 32 }, // example
+};
+
+// If you later capture your *real* codes, put them here:
+const IR_MAP_YOURS = {
+  // power_on:  { proto: "NEC", code: "0xYOURCODE", bits: 32 },
+  // power_off: { proto: "NEC", code: "0xYOURCODE", bits: 32 },
+  // white:     { proto: "NEC", code: "0xYOURCODE", bits: 32 },
+  // warm:      { proto: "NEC", code: "0xYOURCODE", bits: 32 },
+  // red:       { proto: "NEC", code: "0xYOURCODE", bits: 32 },
+  // ...
+};
+
+// Choose which map to use by default:
+let IR_MAP = IR_MAP_PRESET_NEC;
 
 async function sendIrByName(name) {
   const url = baseUrl();
@@ -143,6 +160,17 @@ async function sendIrByName(name) {
   }
   return res.json().catch(() => ({}));
 }
+
+// Dev helper: try any raw hex quickly from console: window.tryIR("0x00FF02FD")
+window.tryIR = async (hex, proto = "NEC", bits = 32) => {
+  const url = baseUrl();
+  const key = apiKey();
+  const qs = new URLSearchParams({ proto, code: hex, bits: String(bits), ...(key ? { key } : {}) });
+  const res = await fetch(`${url}/ir?${qs.toString()}`, { method: "POST", mode: "cors" });
+  return res.ok;
+};
+
+// -----------------------------------------------------
 
 async function ping() {
   const url = baseUrl();
@@ -228,8 +256,8 @@ function buildSwatches() {
 
 function loadSaved() {
   const cfg = getConfig();
-  // Default to your ESP mDNS name; change if you prefer the raw IP
-  document.getElementById("baseUrl").value = cfg.baseUrl || "http://192.168.31.57";
+  // Default to ESP mDNS; swap to raw IP if you prefer (e.g., http://192.168.31.57)
+  document.getElementById("baseUrl").value = cfg.baseUrl || "http://ir-d1.local";
   document.getElementById("authToken").value = cfg.authToken || ""; // used as ?key=
 }
 
@@ -270,7 +298,7 @@ brightness.addEventListener("input", () => {
   debouncedSend(colorPicker.value);
 });
 
-// Mode/command buttons now use IR mapping (fill IR_MAP above)
+// Mode/command buttons use IR mapping
 document.querySelectorAll(".modes button").forEach((btn) => {
   btn.addEventListener("click", async () => {
     try {
@@ -285,7 +313,7 @@ document.querySelectorAll(".modes button").forEach((btn) => {
   });
 });
 
-// Power, White, Warm via IR mapping too
+// Power + white/warm buttons
 document.getElementById("btnOn").addEventListener("click", async () => {
   try {
     await sendIrByName("power_on");
@@ -302,6 +330,28 @@ document.getElementById("btnOff").addEventListener("click", async () => {
     await sendIrByName("power_off");
     setStatus("Connected", "ok");
     toast("Power OFF");
+  } catch (e) {
+    console.error(e);
+    setStatus("Error", "bad");
+    toast(e.message.includes("not mapped") ? "Map IR codes first" : "Send failed");
+  }
+});
+document.getElementById("btnWhite").addEventListener("click", async () => {
+  try {
+    await sendIrByName("white");
+    setStatus("Connected", "ok");
+    toast("White");
+  } catch (e) {
+    console.error(e);
+    setStatus("Error", "bad");
+    toast(e.message.includes("not mapped") ? "Map IR codes first" : "Send failed");
+  }
+});
+document.getElementById("btnWarm").addEventListener("click", async () => {
+  try {
+    await sendIrByName("warm");
+    setStatus("Connected", "ok");
+    toast("Warm white");
   } catch (e) {
     console.error(e);
     setStatus("Error", "bad");
