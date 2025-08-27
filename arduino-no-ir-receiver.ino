@@ -4,8 +4,6 @@
 #include <ESP8266mDNS.h>
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
-#include <IRrecv.h>
-#include <IRutils.h>   // typeToString(), uint64ToString()
 
 // ====== EDIT THESE ======
 const char* WIFI_SSID = "JVan";
@@ -13,36 +11,42 @@ const char* WIFI_PASS = "3Pommern";
 const char* API_KEY   = "d1A7c8e2F9b4k0qR6zL1";
 // ========================
 
-// Pins (ESP8266)
-const uint16_t IR_SEND_PIN = D2;   // -> HW-489 SIG (TX)
-const uint8_t  IR_RECV_PIN = D1;   // -> HW-490 OUT (RX)
-const uint8_t  PIN_R = D5;         // RGB: Red
-const uint8_t  PIN_G = D6;         // RGB: Green
-const uint8_t  PIN_B = D7;         // RGB: Blue
+// ----- LED wiring mode -----
+// true  = resistor-only preview (LED + -> 3.3V), pins SINK current (active LOW)
+// false = transistor drivers   (LED + -> 5V),   pins drive bases (active HIGH)
+#define LED_ACTIVE_LOW false
+
+// Pins
+const uint16_t IR_SEND_PIN = D2;   // HW-489 SIG
+const uint8_t  PIN_R = D5;         // preview Red
+const uint8_t  PIN_G = D6;         // preview Green
+const uint8_t  PIN_B = D7;         // preview Blue
 
 ESP8266WebServer server(80);
 IRsend irsend(IR_SEND_PIN);
-IRrecv irrecv(IR_RECV_PIN);
 
 // ---------- LED helpers ----------
 void setRgb(uint8_t r, uint8_t g, uint8_t b) {
   int pr = map(r, 0, 255, 0, 1023);
   int pg = map(g, 0, 255, 0, 1023);
   int pb = map(b, 0, 255, 0, 1023);
-
+  if (LED_ACTIVE_LOW) {
+    analogWrite(PIN_R, 1023 - pr);
+    analogWrite(PIN_G, 1023 - pg);
+    analogWrite(PIN_B, 1023 - pb);
+  } else {
     analogWrite(PIN_R, pr);
     analogWrite(PIN_G, pg);
     analogWrite(PIN_B, pb);
-
+  }
 }
-void ledOff() { setRgb(0,0,0); }
-void ledRed() { setRgb(255,0,0); }
-void ledGrn() { setRgb(0,255,0); }
-void ledBlu() { setRgb(0,0,255); }
-void ledWht() { setRgb(255,255,255); }
-void ledYel() { setRgb(255,210,0); }
-void ledCyn() { setRgb(0,255,255); }
-void ledMag() { setRgb(255,0,180); } // pink/magenta while connecting
+void ledOff(){ setRgb(0,0,0); }
+void ledRed(){ setRgb(255,0,0); }
+void ledGrn(){ setRgb(0,255,0); }
+void ledBlu(){ setRgb(0,0,255); }
+void ledWht(){ setRgb(255,255,255); }
+void ledMag(){ setRgb(255,0,180); } // pink/magenta
+void ledYel(){ setRgb(255,210,0); }
 
 // ---------- Security / CORS ----------
 bool checkKey() { return server.hasArg("key") && server.arg("key") == API_KEY; }
@@ -53,89 +57,63 @@ void sendCORS() {
 }
 void handleOptions(){ sendCORS(); server.send(204); }
 
-// ---------- IR receive storage (for /ir/last) ----------
-static const uint16_t MAX_RAW = 300;
-volatile bool has_last = false;
-String    last_proto = "UNKNOWN";
-uint64_t  last_code  = 0;
-uint16_t  last_bits  = 0;
-bool      last_repeat = false;
-uint16_t  last_raw[MAX_RAW];
-uint16_t  last_raw_len = 0;
-const uint16_t RAW_TICK_US = 50;
-
-// ---------- Optional: map common NEC codes -> colors ----------
-struct IrColorMap {
-  decode_type_t proto;
-  uint64_t code;
-  const char* name;
-  uint8_t r, g, b;
+// ---------- IR map (your codes) ----------
+struct Btn {
+  const char* name;   // slug used in API
+  uint32_t    code;   // NEC 32-bit
+  bool        preview;// update RGB preview?
+  uint8_t     r,g,b;  // preview color (ignored if preview=false)
 };
 
-// Example NEC 24/21-key remote codes (may differ on your remote).
-// Replace codes once you learn yours from Serial or /ir/last.
-static const IrColorMap COLOR_MAP[] = {
-  { NEC, 0x00FF9867, "RED",    255,   0,   0 },
-  { NEC, 0x00FF38C7, "GREEN",    0, 255,   0 },
-  { NEC, 0x00FF18E7, "BLUE",     0,   0, 255 },
-  { NEC, 0x00FF02FD, "WHITE",  255, 255, 255 },
-  // add more once learned:
-  // { NEC, 0xXXXXXXXX, "YELLOW", 255, 220, 0 },
-  // { NEC, 0xXXXXXXXX, "CYAN",     0, 255, 255 },
-  // { NEC, 0xXXXXXXXX, "MAGENTA", 255,   0, 180 },
+static const Btn BTN_MAP[] = {
+  {"bright_up",   0xF700FF, false, 0,0,0},
+  {"bright_down", 0xF7807F, false, 0,0,0},
+
+  {"off",  0xF740BF, true,  0,0,0},
+  {"on",   0xF7C03F, true,  255,255,255},
+
+  {"red1",   0xF720DF, true, 255,0,0},
+  {"red2",   0xF710EF, true, 255,0,0},
+  {"red3",   0xF730CF, true, 255,0,0},
+  {"red4",   0xF708F7, true, 255,0,0},
+  {"red5",   0xF728D7, true, 255,0,0},
+
+  {"green1", 0xF7A05F, true, 0,255,0},
+  {"green2", 0xF7906F, true, 0,255,0},
+  {"green3", 0xF7B04F, true, 0,255,0},
+  {"green4", 0xF78877, true, 0,255,0},
+  {"green5", 0xF7A857, true, 0,255,0},
+
+  {"blue1",  0xF7609F, true, 0,0,255},
+  {"blue2",  0xF750AF, true, 0,0,255},
+  {"blue3",  0xF7708F, true, 0,0,255},
+  {"blue4",  0xF748B7, true, 0,0,255},
+  {"blue5",  0xF76897, true, 0,0,255},
+
+  {"white",  0xF7E01F, true, 255,255,255},
+
+  {"flash",  0xF7D02F, false, 0,0,0},
+  {"strobe", 0xF7F00F, false, 0,0,0},
+  {"fade",   0xF7C837, false, 0,0,0},
+  {"smooth", 0xF7E817, false, 0,0,0},
 };
-static const uint8_t COLOR_MAP_LEN = sizeof(COLOR_MAP)/sizeof(COLOR_MAP[0]);
+static const uint8_t BTN_COUNT = sizeof(BTN_MAP)/sizeof(BTN_MAP[0]);
 
-bool applyMappedColor(decode_type_t proto, uint64_t code) {
-  for (uint8_t i = 0; i < COLOR_MAP_LEN; i++) {
-    if (COLOR_MAP[i].proto == proto && COLOR_MAP[i].code == code) {
-      setRgb(COLOR_MAP[i].r, COLOR_MAP[i].g, COLOR_MAP[i].b);
-      Serial.print("IR->LED: ");
-      Serial.print(COLOR_MAP[i].name);
-      Serial.print(" (0x"); Serial.print(uint64ToString(code, 16)); Serial.println(")");
-      return true;
-    }
-  }
-  return false;
+// case-insensitive compare (no custom types in signature)
+bool equalsIgnoreCaseStr(const String& a, const char* b) {
+  String bb(b);
+  return a.equalsIgnoreCase(bb);
 }
 
-// Capture & log any new IR decode. Also try to mirror LED color if mapped.
-void captureIfAvailable() {
-  decode_results results;
-  if (irrecv.decode(&results)) {
-    last_proto  = typeToString(results.decode_type);
-    last_bits   = results.bits;
-    last_repeat = results.repeat;
-    last_code   = results.value;
-
-    last_raw_len = min<uint16_t>(results.rawlen, MAX_RAW);
-    for (uint16_t i = 0; i < last_raw_len; i++) last_raw[i] = results.rawbuf[i];
-    has_last = true;
-
-    // --- Serial log ---
-    Serial.print("IR RX: proto=");
-    Serial.print(last_proto);
-    Serial.print(" code=0x");
-    Serial.print(uint64ToString(last_code, 16));
-    Serial.print(" bits=");
-    Serial.print(last_bits);
-    if (last_repeat) Serial.print(" (repeat)");
-    Serial.print(" rawlen=");
-    Serial.println(last_raw_len);
-
-    // --- LED feedback ---
-    if (!last_repeat) { // ignore repeats for color changes
-      if (!applyMappedColor(results.decode_type, results.value)) {
-        // Unknown code: blink yellow quickly as feedback
-        ledYel(); delay(80); ledOff();
-      }
-    }
-
-    irrecv.resume();
+// Return index in BTN_MAP, or -1 if not found
+int16_t findBtnIndex(const String& name) {
+  for (uint8_t i = 0; i < BTN_COUNT; i++) {
+    if (equalsIgnoreCaseStr(name, BTN_MAP[i].name)) return i;
   }
+  return -1;
 }
 
-// ---------- HTTP routes ----------
+// ---------- HTTP Handlers ----------
 void handleHealth() {
   sendCORS();
   server.send(200, "application/json", "{\"ok\":true}");
@@ -152,104 +130,64 @@ void handleColor() {
   int g = constrain(server.arg("g").toInt(), 0, 255);
   int b = constrain(server.arg("b").toInt(), 0, 255);
 
-  Serial.print("HTTP /color -> r="); Serial.print(r);
-  Serial.print(" g="); Serial.print(g);
-  Serial.print(" b="); Serial.println(b);
-
+  Serial.printf("HTTP /color -> r=%d g=%d b=%d\n", r,g,b);
   setRgb(r,g,b);
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
-// POST /ir?proto=NEC&code=0x..&bits=32&key=
-void handleIr() {
+// POST /btn?name=<slug>&key=...
+void handleBtn() {
   sendCORS();
   if (!checkKey()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
-  if (!server.hasArg("proto") || !server.hasArg("code") || !server.hasArg("bits")) {
-    server.send(400, "application/json", "{\"error\":\"missing proto/code/bits\"}"); return;
+  if (!server.hasArg("name")) { server.send(400, "application/json", "{\"error\":\"missing name\"}"); return; }
+
+  String name = server.arg("name");
+  int16_t idx = findBtnIndex(name);
+  if (idx < 0) {
+    server.send(404, "application/json", "{\"error\":\"unknown button\"}");
+    return;
   }
-  String proto = server.arg("proto");
-  uint32_t code = strtoul(server.arg("code").c_str(), nullptr, 0);
-  uint16_t bits = (uint16_t) server.arg("bits").toInt();
+  const Btn& btn = BTN_MAP[idx];
 
-  Serial.print("HTTP /ir -> proto="); Serial.print(proto);
-  Serial.print(" code=0x"); Serial.print(String(code, 16));
-  Serial.print(" bits="); Serial.println(bits);
+  Serial.printf("HTTP /btn -> %s  code=0x%08lX\n", btn.name, (unsigned long)btn.code);
 
-  irsend.begin(); // 38 kHz default
-  bool sent = false;
-  if (proto == "NEC")        { irsend.sendNEC(code, bits); sent = true; }
-  else if (proto == "SONY")  { irsend.sendSony(code, bits); sent = true; }
-  else if (proto == "RC5")   { irsend.sendRC5(code, bits);  sent = true; }
-  else if (proto == "RC6")   { irsend.sendRC6(code, bits);  sent = true; }
-  else if (proto == "SAMSUNG"){ irsend.sendSAMSUNG(code, bits); sent = true; }
+  // Send IR (NEC, 32 bits)
+  irsend.sendNEC(btn.code, 32);
 
-  if (!sent) { server.send(400, "application/json", "{\"error\":\"unsupported proto\"}"); return; }
-  server.send(200, "application/json", "{\"ok\":true}");
-}
-
-// POST /irraw?kHz=38&durations=...&key=
-void handleIrRaw() {
-  sendCORS();
-  if (!checkKey()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
-  if (!server.hasArg("durations")) { server.send(400, "application/json", "{\"error\":\"missing durations\"}"); return; }
-
-  long khzLong = server.hasArg("kHz") ? server.arg("kHz").toInt() : 38;
-  if (khzLong < 1) khzLong = 1;
-  int khz = (int)khzLong;
-
-  String csv = server.arg("durations");
-  Serial.print("HTTP /irraw -> kHz="); Serial.print(khz); Serial.print(" durations(len)="); Serial.println(csv.length());
-
-  int count = 1;
-  for (unsigned int i=0; i<csv.length(); i++) if (csv[i] == ',') count++;
-  uint16_t *dur = new uint16_t[count];
-
-  char* s = strdup(csv.c_str());
-  int idx = 0;
-  for (char* tok = strtok(s, ","); tok && idx < count; tok = strtok(nullptr, ",")) {
-    dur[idx++] = (uint16_t) atoi(tok);
+  // Preview
+  if (btn.preview) {
+    setRgb(btn.r, btn.g, btn.b);
+  } else {
+    ledYel(); delay(70); ledOff();
   }
-  free(s);
 
-  irsend.begin();
-  irsend.sendRaw(dur, idx, khz); // microseconds, carrier kHz
-  delete[] dur;
-
-  server.send(200, "application/json", "{\"ok\":true}");
-}
-
-// GET /ir/last
-void handleIrLast() {
-  sendCORS();
-  String json = "{\"ok\":";
-  json += (has_last ? "true" : "false");
-  if (has_last) {
-    json += ",\"proto\":\"" + last_proto + "\"";
-    json += ",\"code\":\"0x" + uint64ToString(last_code, 16) + "\"";
-    json += ",\"bits\":" + String(last_bits);
-    json += ",\"repeat\":" + String(last_repeat ? "true" : "false");
-    json += ",\"tick_us\":" + String(RAW_TICK_US);
-    json += ",\"raw_ticks\":[";
-    for (uint16_t i = 0; i < last_raw_len; i++) {
-      if (i) json += ",";
-      json += String(last_raw[i]);
-    }
-    json += "]";
-  }
-  json += "}";
+  String json = String("{\"ok\":true,\"name\":\"") + btn.name + "\"}";
   server.send(200, "application/json", json);
 }
 
-// POST /ir/clear?key=
-void handleIrClear() {
+// POST /power?state=on|off&key=...
+void handlePower() {
   sendCORS();
   if (!checkKey()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
-  has_last = false;
-  last_proto = "UNKNOWN"; last_code = 0; last_bits = 0; last_repeat = false; last_raw_len = 0;
-  server.send(200, "application/json", "{\"ok\":true}");
+  if (!server.hasArg("state")) { server.send(400, "application/json", "{\"error\":\"missing state\"}"); return; }
+
+  String s = server.arg("state");
+  int16_t idx = -1;
+  if (s.equalsIgnoreCase("on"))  idx = findBtnIndex("on");
+  if (s.equalsIgnoreCase("off")) idx = findBtnIndex("off");
+
+  if (idx < 0) { server.send(400, "application/json", "{\"error\":\"state must be on/off\"}"); return; }
+
+  const Btn& b = BTN_MAP[idx];
+  Serial.printf("HTTP /power -> %s  code=0x%08lX\n", b.name, (unsigned long)b.code);
+  irsend.sendNEC(b.code, 32);
+  if (s.equalsIgnoreCase("on")) ledWht(); else ledOff();
+
+  String json = String("{\"ok\":true,\"state\":\"") + s + "\"}";
+  server.send(200, "application/json", json);
 }
 
-// ---- Wi-Fi with status colours ----
+// ---------- Wi-Fi with status colours ----------
 void connectWifiVerbose() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -264,11 +202,10 @@ void connectWifiVerbose() {
     if (millis() - lastBlink >= 300) {
       lastBlink = millis();
       on = !on;
-      if (on) ledMag(); else ledOff();  // blink pink while connecting
+      if (on) ledMag(); else ledOff(); // blink pink while connecting
       Serial.print(".");
     }
     delay(25);
-    captureIfAvailable();
   }
   Serial.println();
 
@@ -292,7 +229,7 @@ void setup() {
   analogWriteRange(1023);
   ledOff();
 
-  irrecv.enableIRIn(); // start receiver
+  irsend.begin(); // init IR transmitter once
 
   connectWifiVerbose();
   if (WiFi.status() == WL_CONNECTED) {
@@ -300,29 +237,56 @@ void setup() {
   }
 
   // Routes
-  server.on("/health", HTTP_GET, handleHealth);
-  server.on("/health", HTTP_OPTIONS, handleOptions);
+  server.on("/health",  HTTP_GET,     handleHealth);
+  server.on("/health",  HTTP_OPTIONS, handleOptions);
 
-  server.on("/color",  HTTP_POST,   handleColor);
-  server.on("/color",  HTTP_OPTIONS,handleOptions);
+  server.on("/color",   HTTP_POST,    handleColor);
+  server.on("/color",   HTTP_OPTIONS, handleOptions);
 
-  server.on("/ir",     HTTP_POST,   handleIr);
-  server.on("/ir",     HTTP_OPTIONS,handleOptions);
+  server.on("/btn",     HTTP_POST,    handleBtn);
+  server.on("/btn",     HTTP_OPTIONS, handleOptions);
 
-  server.on("/irraw",  HTTP_POST,   handleIrRaw);
-  server.on("/irraw",  HTTP_OPTIONS,handleOptions);
+  server.on("/power",   HTTP_POST,    handlePower);
+  server.on("/power",   HTTP_OPTIONS, handleOptions);
 
-  server.on("/ir/last",  HTTP_GET,  handleIrLast);
-  server.on("/ir/clear", HTTP_POST, handleIrClear);
-  server.on("/ir/clear", HTTP_OPTIONS, handleOptions);
+  server.onNotFound([](){
+    sendCORS();
+    server.send(404, "application/json", "{\"error\":\"not found\"}");
+  });
 
-  server.onNotFound([](){ sendCORS(); server.send(404, "application/json", "{\"error\":\"not found\"}"); });
+  server.on("/nec", HTTP_POST, handleNecCmd);
+server.on("/nec", HTTP_OPTIONS, handleOptions);
 
   server.begin();
   Serial.println("HTTP server started");
 }
 
+// --- handler: POST /nec?cmd=0xNN&key=... ---
+void handleNecCmd() {
+  sendCORS();
+  if (!checkKey()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
+  if (!server.hasArg("cmd")) { server.send(400, "application/json", "{\"error\":\"missing cmd\"}"); return; }
+
+  String s = server.arg("cmd");
+  // accept formats like "0xA4" or "164"
+  uint8_t cmd = (uint8_t) strtoul(s.c_str(), nullptr, 0);
+  uint8_t inv = (uint8_t) (~cmd);
+
+  // Build full 32-bit extended NEC: 0x00F7 cmd inv
+  uint32_t code = (0x00F7UL << 16) | ((uint32_t)cmd << 8) | (uint32_t)inv;
+
+  Serial.printf("HTTP /nec -> cmd=0x%02X inv=0x%02X full=0x%08lX\n", cmd, inv, (unsigned long)code);
+  irsend.sendNEC(code, 32);
+
+  // brief yellow blink so you see activity
+  ledYel(); delay(70); ledOff();
+
+  char buf[64];
+  snprintf(buf, sizeof(buf), "{\"ok\":true,\"cmd\":\"0x%02X\",\"full\":\"0x%08lX\"}", cmd, (unsigned long)code);
+  server.send(200, "application/json", buf);
+}
+
+
 void loop() {
   server.handleClient();
-  captureIfAvailable();
 }
