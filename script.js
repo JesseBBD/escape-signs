@@ -12,6 +12,8 @@ const toast = (msg) => {
   setTimeout(() => el.classList.remove("show"), 1600);
 };
 
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
 // --- Persistence ---
 const STORAGE_KEY = "pi-ir-remote";
 function getConfig() {
@@ -41,7 +43,6 @@ async function request(rawUrl, method = "POST") {
   }
   return res.json().catch(() => ({}));
 }
-
 async function sendBtn(name) {
   const url = baseUrl();
   if (!url) throw new Error("Base URL is empty");
@@ -80,6 +81,30 @@ function setStatus(msg, level = "warn") {
       : "0 0 14px rgba(245,158,11,.5)";
 }
 
+// --- Preview + Brightness model ---
+let currentCode = "white";
+let previewBaseFill = "#ffffff"; // CSS background (hex or gradient)
+let previewLabel = "White";
+let currentBrightness = 1.0; // 0.0 .. 1.0
+const BRIGHT_STEP = 1 / 16; // ~6.25% per press
+const MIN_PREVIEW_BRIGHT = 0.56; // don't go fully black in UI
+
+function syncPreviewBrightness() {
+  const pct = Math.round(currentBrightness * 100);
+  preview.style.background = previewBaseFill;
+  preview.style.filter = `brightness(${currentBrightness})`;
+  preview.textContent = `${previewLabel} • ${pct}%`;
+}
+function setPreview(fillCss, label) {
+  previewBaseFill = fillCss;
+  previewLabel = label ?? "—";
+  syncPreviewBrightness();
+}
+function adjustBrightness(delta) {
+  currentBrightness = clamp(currentBrightness + delta, MIN_PREVIEW_BRIGHT, 1.0);
+  syncPreviewBrightness();
+}
+
 // --- Swatches (mapped to your learned button names) ---
 const defaultColors = [
   // name, hex, button slug (your firmware maps these to NEC codes)
@@ -101,14 +126,6 @@ const defaultColors = [
   ["White", "#ffffff", "white"],
 ];
 
-let currentCode = "white";
-
-function setPreview(hexOrCss) {
-  preview.style.background = hexOrCss;
-  preview.textContent = typeof hexOrCss === "string" ? hexOrCss.toUpperCase().slice(0, 16) : "—";
-}
-
-// Build grid
 function buildSwatches() {
   swatches.innerHTML = "";
   for (const [name, fill, code] of defaultColors) {
@@ -118,7 +135,7 @@ function buildSwatches() {
     btn.style.background = fill;
     btn.addEventListener("click", async () => {
       currentCode = code;
-      setPreview(typeof fill === "string" ? fill : "#000");
+      setPreview(fill, name); // update label + base color
       try {
         await sendBtn(code);
         setStatus("Connected", "ok");
@@ -133,7 +150,7 @@ function buildSwatches() {
 }
 
 // --- Brightness with press-and-hold auto-repeat ---
-function attachRepeater(el, code, intervalMs = 300) {
+function attachRepeater(el, code, step, intervalMs = 300) {
   let t;
   const fire = async () => {
     try {
@@ -143,6 +160,7 @@ function attachRepeater(el, code, intervalMs = 300) {
       setStatus("Error", "bad");
       toast("Send failed");
     }
+    adjustBrightness(step); // reflect locally
   };
   const down = (e) => {
     e.preventDefault();
@@ -163,6 +181,10 @@ function loadSaved() {
   const cfg = getConfig();
   document.getElementById("baseUrl").value = cfg.baseUrl || "http://192.168.31.57";
   document.getElementById("authToken").value = cfg.authToken || "";
+  // start with White @ 100%
+  setPreview("#ffffff", "White");
+  currentBrightness = 1.0;
+  syncPreviewBrightness();
 }
 function save() {
   setConfig({ baseUrl: baseUrl(), authToken: apiKey() });
@@ -199,6 +221,7 @@ $("#btnWhite").addEventListener("click", async () => {
   try {
     await sendBtn("white");
     currentCode = "white";
+    setPreview("#ffffff", "White");
     setStatus("Connected", "ok");
     toast("White");
   } catch {
@@ -207,9 +230,9 @@ $("#btnWhite").addEventListener("click", async () => {
   }
 });
 
-// Brightness repeaters
-attachRepeater($("#btnDim"), "bright_down", 280);
-attachRepeater($("#btnBright"), "bright_up", 280);
+// Brightness repeaters (reflect ~6.25% per press)
+attachRepeater($("#btnDim"), "bright_down", -BRIGHT_STEP, 280);
+attachRepeater($("#btnBright"), "bright_up", BRIGHT_STEP, 280);
 
 // Modes
 document.querySelectorAll(".mode").forEach((b) => {
@@ -228,5 +251,4 @@ document.querySelectorAll(".mode").forEach((b) => {
 // Boot
 buildSwatches();
 loadSaved();
-setPreview("—");
 ping();
