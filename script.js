@@ -49,22 +49,52 @@ function setConfig(cfg) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
 }
 
-// --- Network ---
+// --- Network helpers for ESP endpoints ---
 function baseUrl() {
-  return document.getElementById("baseUrl").value.trim();
+  return document.getElementById("baseUrl").value.trim().replace(/\/+$/, "");
+}
+function apiKey() {
+  // Reuse your existing "authToken" input; we’ll send it as ?key=...
+  return document.getElementById("authToken").value.trim();
 }
 
-async function request(path, body) {
+async function getJson(url) {
+  const res = await fetch(url, { mode: "cors", keepalive: true });
+  if (!res.ok) {
+    const t = await res.text().catch(() => res.statusText);
+    throw new Error(`HTTP ${res.status}: ${t}`);
+  }
+  // health returns JSON; color/ir return JSON too ({"ok":true})
+  return res.json().catch(() => ({}));
+}
+
+// Scale r/g/b by brightness% on the client
+function applyBrightness({ r, g, b }, pct) {
+  const f = clamp(pct, 0, 100) / 100;
+  return {
+    r: Math.round(r * f),
+    g: Math.round(g * f),
+    b: Math.round(b * f),
+  };
+}
+
+// ESP8266 expects query params on POST; body is unused.
+async function sendColor(hex) {
   const url = baseUrl();
   if (!url) throw new Error("Base URL is empty");
-  const token = document.getElementById("authToken").value.trim();
-  const res = await fetch(url.replace(/\/$/, "") + path, {
+  const key = apiKey();
+  const { r, g, b } = hexToRgb(hex);
+  const scaled = applyBrightness({ r, g, b }, parseInt(brightness.value || "100", 10));
+
+  const qs = new URLSearchParams({
+    r: String(scaled.r),
+    g: String(scaled.g),
+    b: String(scaled.b),
+    ...(key ? { key } : {}),
+  });
+
+  const res = await fetch(`${url}/color?${qs.toString()}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
     mode: "cors",
     keepalive: true,
   });
@@ -75,29 +105,50 @@ async function request(path, body) {
   return res.json().catch(() => ({}));
 }
 
-async function sendColor(hex) {
-  const { r, g, b } = hexToRgb(hex);
-  const bPct = clamp(parseInt(brightness.value, 10), 0, 100);
-  const payload = { r, g, b, brightness: bPct };
-  const data = await request("/color", payload);
-  return data;
-}
+// --- IR command mapping (fill these with your real codes later) ---
+/*
+  Put your learned codes here once you have them (using an IR receiver or known docs).
+  Example:
+  IR_MAP = {
+    power_on:  { proto: "NEC", code: "0x00FFA25D", bits: 32 },
+    power_off: { proto: "NEC", code: "0x00FFE21D", bits: 32 },
+    white:     { proto: "NEC", code: "0x00FF02FD", bits: 32 },
+    warm:      { proto: "NEC", code: "0x00FF22DD", bits: 32 },
+  };
+*/
+let IR_MAP = {};
 
-async function sendCommand(name) {
-  const data = await request("/command", { name });
-  return data;
-}
+async function sendIrByName(name) {
+  const url = baseUrl();
+  if (!url) throw new Error("Base URL is empty");
+  const key = apiKey();
+  const cmd = IR_MAP[name];
+  if (!cmd) throw new Error(`IR command "${name}" not mapped yet`);
 
-async function sendPower(state) {
-  const data = await request("/power", { state });
-  return data;
+  const qs = new URLSearchParams({
+    proto: cmd.proto,
+    code: cmd.code,
+    bits: String(cmd.bits || 32),
+    ...(key ? { key } : {}),
+  });
+
+  const res = await fetch(`${url}/ir?${qs.toString()}`, {
+    method: "POST",
+    mode: "cors",
+    keepalive: true,
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => res.statusText);
+    throw new Error(`HTTP ${res.status}: ${t}`);
+  }
+  return res.json().catch(() => ({}));
 }
 
 async function ping() {
   const url = baseUrl();
   if (!url) return setStatus("Not connected", "warn");
   try {
-    const res = await fetch(url.replace(/\/$/, "") + "/health", { mode: "cors" });
+    const res = await fetch(`${url}/health`, { mode: "cors" });
     if (res.ok) setStatus("Connected", "ok");
     else setStatus("Unreachable", "bad");
   } catch {
@@ -177,12 +228,16 @@ function buildSwatches() {
 
 function loadSaved() {
   const cfg = getConfig();
-  document.getElementById("baseUrl").value = cfg.baseUrl || "http://raspberrypi.local:8000";
-  document.getElementById("authToken").value = cfg.authToken || "";
+  // Default to your ESP mDNS name; change if you prefer the raw IP
+  document.getElementById("baseUrl").value = cfg.baseUrl || "http://192.168.31.57";
+  document.getElementById("authToken").value = cfg.authToken || ""; // used as ?key=
 }
 
 function save() {
-  setConfig({ baseUrl: baseUrl(), authToken: document.getElementById("authToken").value.trim() });
+  setConfig({
+    baseUrl: baseUrl(),
+    authToken: apiKey(),
+  });
   toast("Saved");
   ping();
 }
@@ -215,57 +270,42 @@ brightness.addEventListener("input", () => {
   debouncedSend(colorPicker.value);
 });
 
+// Mode/command buttons now use IR mapping (fill IR_MAP above)
 document.querySelectorAll(".modes button").forEach((btn) => {
   btn.addEventListener("click", async () => {
     try {
-      await sendCommand(btn.dataset.mode);
+      await sendIrByName(btn.dataset.mode);
       setStatus("Connected", "ok");
       toast(`${btn.dataset.mode} mode`);
-    } catch {
+    } catch (e) {
+      console.error(e);
       setStatus("Error", "bad");
-      toast("Send failed");
+      toast(e.message.includes("not mapped") ? "Map IR codes first" : "Send failed");
     }
   });
 });
 
+// Power, White, Warm via IR mapping too
 document.getElementById("btnOn").addEventListener("click", async () => {
   try {
-    await sendPower("on");
+    await sendIrByName("power_on");
     setStatus("Connected", "ok");
     toast("Power ON");
-  } catch {
+  } catch (e) {
+    console.error(e);
     setStatus("Error", "bad");
-    toast("Send failed");
+    toast(e.message.includes("not mapped") ? "Map IR codes first" : "Send failed");
   }
 });
 document.getElementById("btnOff").addEventListener("click", async () => {
   try {
-    await sendPower("off");
+    await sendIrByName("power_off");
     setStatus("Connected", "ok");
     toast("Power OFF");
-  } catch {
+  } catch (e) {
+    console.error(e);
     setStatus("Error", "bad");
-    toast("Send failed");
-  }
-});
-document.getElementById("btnWhite").addEventListener("click", async () => {
-  try {
-    await sendCommand("white");
-    setStatus("Connected", "ok");
-    toast("White");
-  } catch {
-    setStatus("Error", "bad");
-    toast("Send failed");
-  }
-});
-document.getElementById("btnWarm").addEventListener("click", async () => {
-  try {
-    await sendCommand("warm");
-    setStatus("Connected", "ok");
-    toast("Warm white");
-  } catch {
-    setStatus("Error", "bad");
-    toast("Send failed");
+    toast(e.message.includes("not mapped") ? "Map IR codes first" : "Send failed");
   }
 });
 
@@ -273,4 +313,5 @@ document.getElementById("btnWarm").addEventListener("click", async () => {
 buildSwatches();
 loadSaved();
 setPreview(colorPicker.value);
+brightnessVal.textContent = `${brightness.value}%`;
 ping();
