@@ -13,13 +13,14 @@ const char* API_KEY   = "d1A7c8e2F9b4k0qR6zL1";
 
 // Pins (ESP8266)
 const uint16_t IR_SEND_PIN = D2;   // -> HW-489 SIG
-const uint8_t  PIN_R = D5;         // -> NPN base via 1k, collector to HW-478 R
-const uint8_t  PIN_G = D6;         // -> NPN base via 1k, collector to HW-478 G
-const uint8_t  PIN_B = D7;         // -> NPN base via 1k, collector to HW-478 B
+const uint8_t  PIN_R = D5;         // -> Red channel
+const uint8_t  PIN_G = D6;         // -> Green channel
+const uint8_t  PIN_B = D7;         // -> Blue channel
 
 ESP8266WebServer server(80);
 IRsend irsend(IR_SEND_PIN);
 
+// --------- helpers ---------
 void sendCORS() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -31,16 +32,21 @@ bool checkKey() {
   return server.hasArg("key") && server.arg("key") == API_KEY;
 }
 
+// r/g/b in 0..255
 void setRgb(uint8_t r, uint8_t g, uint8_t b) {
   int pr = map(r, 0, 255, 0, 1023);
   int pg = map(g, 0, 255, 0, 1023);
   int pb = map(b, 0, 255, 0, 1023);
 
-  analogWrite(D5, pr); // Red
-  analogWrite(D6, pg); // Green
-  analogWrite(D7, pb); // Blue
+    analogWrite(PIN_R, pr);
+    analogWrite(PIN_G, pg);
+    analogWrite(PIN_B, pb);
 }
 
+void ledOff() { setRgb(0,0,0); }
+void ledRed() { setRgb(255,0,0); }
+void ledGrn() { setRgb(0,255,0); }
+void ledPink(){ setRgb(255,0,180); } // nice bright pink
 
 // --- routes ---
 void handleHealth() {
@@ -75,10 +81,10 @@ void handleIr() {
 
   irsend.begin(); // sets 38kHz default carrier
   bool sent = false;
-  if (proto == "NEC")       { irsend.sendNEC(code, bits); sent = true; }
-  else if (proto == "SONY") { irsend.sendSony(code, bits); sent = true; }
-  else if (proto == "RC5")  { irsend.sendRC5(code, bits); sent = true; }
-  else if (proto == "RC6")  { irsend.sendRC6(code, bits); sent = true; }
+  if (proto == "NEC")        { irsend.sendNEC(code, bits); sent = true; }
+  else if (proto == "SONY")  { irsend.sendSony(code, bits); sent = true; }
+  else if (proto == "RC5")   { irsend.sendRC5(code, bits);  sent = true; }
+  else if (proto == "RC6")   { irsend.sendRC6(code, bits);  sent = true; }
   else if (proto == "SAMSUNG"){ irsend.sendSAMSUNG(code, bits); sent = true; }
 
   if (!sent) { server.send(400, "application/json", "{\"error\":\"unsupported proto\"}"); return; }
@@ -114,28 +120,53 @@ void handleIrRaw() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+// ---- Wi-Fi with status colours ----
 void connectWifiVerbose() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+
   Serial.print("Connecting to "); Serial.print(WIFI_SSID); Serial.print(" ...");
+
+  // flash pink while connecting
   uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000UL) { delay(250); Serial.print("."); }
+  uint32_t lastBlink = 0;
+  bool on = false;
+
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000UL) {
+    // blink ~3Hz
+    if (millis() - lastBlink >= 300) {
+      lastBlink = millis();
+      on = !on;
+      if (on) ledPink(); else ledOff();
+      Serial.print(".");
+    }
+    delay(25);
+  }
   Serial.println();
-  if (WiFi.status() == WL_CONNECTED) { Serial.print("Connected! IP: "); Serial.println(WiFi.localIP()); }
-  else { Serial.println("Failed to connect within 20s."); WiFi.printDiag(Serial); }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("Connected! IP: "); Serial.println(WiFi.localIP());
+    ledGrn(); // success
+  } else {
+    Serial.println("Failed to connect within 20s.");
+    WiFi.printDiag(Serial);
+    ledRed(); // failure
+  }
 }
 
 void setup() {
-  Serial.begin(115200); delay(200);
+  Serial.begin(115200);
+  delay(200);
 
   // PWM pins
   pinMode(PIN_R, OUTPUT);
   pinMode(PIN_G, OUTPUT);
   pinMode(PIN_B, OUTPUT);
   analogWriteRange(1023);
-  setRgb(255,0,0);
+  ledOff();
 
   connectWifiVerbose();
+
   if (WiFi.status() == WL_CONNECTED) {
     if (MDNS.begin("ir-d1")) Serial.println("mDNS: http://ir-d1.local");
   }
