@@ -1,39 +1,15 @@
 // --- Utilities ---
 const $ = (sel) => document.querySelector(sel);
-const preview = $("#preview");
-const colorPicker = $("#colorPicker");
-const brightness = $("#brightness");
-const brightnessVal = $("#brightnessVal");
 const swatches = $("#swatches");
 const statusText = $("#statusText");
 const dot = $("#dot");
+const preview = $("#preview");
 
 const toast = (msg) => {
   const el = document.getElementById("toast");
   el.textContent = msg;
   el.classList.add("show");
-  setTimeout(() => el.classList.remove("show"), 1800);
-};
-
-const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
-
-function hexToRgb(hex) {
-  const s = hex.replace("#", "");
-  const bigint = parseInt(s, 16);
-  const r = (bigint >> 16) & 255;
-  const g = (bigint >> 8) & 255;
-  const b = bigint & 255;
-  return { r, g, b };
-}
-
-const setPreview = (hex) => {
-  preview.style.background = hex;
-  preview.textContent = hex.toUpperCase();
-  const rgb = hexToRgb(hex);
-  const lum = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
-  preview.style.color = lum > 0.6 ? "#111" : "#fff";
-  preview.style.textShadow =
-    lum > 0.6 ? "0 1px 0 rgba(0,0,0,0.25)" : "0 1px 0 rgba(255,255,255,0.25)";
+  setTimeout(() => el.classList.remove("show"), 1600);
 };
 
 // --- Persistence ---
@@ -49,17 +25,16 @@ function setConfig(cfg) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
 }
 
-// --- Network helpers for ESP endpoints ---
+// --- Network helpers (ESP endpoints) ---
 function baseUrl() {
   return document.getElementById("baseUrl").value.trim().replace(/\/+$/, "");
 }
 function apiKey() {
-  // We reuse your "authToken" input; we send it as ?key=...
   return document.getElementById("authToken").value.trim();
 }
 
-async function getJson(url) {
-  const res = await fetch(url, { mode: "cors", keepalive: true });
+async function request(rawUrl, method = "POST") {
+  const res = await fetch(rawUrl, { method, mode: "cors", keepalive: true });
   if (!res.ok) {
     const t = await res.text().catch(() => res.statusText);
     throw new Error(`HTTP ${res.status}: ${t}`);
@@ -67,184 +42,87 @@ async function getJson(url) {
   return res.json().catch(() => ({}));
 }
 
-// Scale r/g/b by brightness% client-side
-function applyBrightness({ r, g, b }, pct) {
-  const f = clamp(pct, 0, 100) / 100;
-  return {
-    r: Math.round(r * f),
-    g: Math.round(g * f),
-    b: Math.round(b * f),
-  };
-}
-
-// Send /color as POST with query params (?r=&g=&b=&key=...)
-async function sendColor(hex) {
+async function sendBtn(name) {
   const url = baseUrl();
   if (!url) throw new Error("Base URL is empty");
   const key = apiKey();
-  const { r, g, b } = hexToRgb(hex);
-  const scaled = applyBrightness({ r, g, b }, parseInt(brightness.value || "100", 10));
-
-  const qs = new URLSearchParams({
-    r: String(scaled.r),
-    g: String(scaled.g),
-    b: String(scaled.b),
-    ...(key ? { key } : {}),
-  });
-
-  const res = await fetch(`${url}/color?${qs.toString()}`, {
-    method: "POST",
-    mode: "cors",
-    keepalive: true,
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => res.statusText);
-    throw new Error(`HTTP ${res.status}: ${t}`);
-  }
-  return res.json().catch(() => ({}));
+  const qs = new URLSearchParams({ name });
+  if (key) qs.set("key", key);
+  return request(`${url}/btn?${qs.toString()}`);
 }
-
-// --- IR command mapping ------------------------------
-// PRESET A: Example NEC codes (common on small 21/24-key remotes).
-// These may or may not match your strip controller — try them first.
-// If they don't work, you'll replace with learned codes from your remote.
-const IR_MAP_PRESET_NEC = {
-  power_on: { proto: "NEC", code: "0x00FFA25D", bits: 32 }, // example
-  power_off: { proto: "NEC", code: "0x00FFE21D", bits: 32 }, // example
-  white: { proto: "NEC", code: "0x00FF02FD", bits: 32 }, // example
-  warm: { proto: "NEC", code: "0x00FF22DD", bits: 32 }, // example
-  red: { proto: "NEC", code: "0x00FF9867", bits: 32 }, // example
-  green: { proto: "NEC", code: "0x00FF38C7", bits: 32 }, // example
-  blue: { proto: "NEC", code: "0x00FF18E7", bits: 32 }, // example
-  flash: { proto: "NEC", code: "0x00FFB04F", bits: 32 }, // example
-  strobe: { proto: "NEC", code: "0x00FF6897", bits: 32 }, // example
-  fade: { proto: "NEC", code: "0x00FF30CF", bits: 32 }, // example
-  smooth: { proto: "NEC", code: "0x00FF10EF", bits: 32 }, // example
-};
-
-// If you later capture your *real* codes, put them here:
-const IR_MAP_YOURS = {
-  // power_on:  { proto: "NEC", code: "0xYOURCODE", bits: 32 },
-  // power_off: { proto: "NEC", code: "0xYOURCODE", bits: 32 },
-  // white:     { proto: "NEC", code: "0xYOURCODE", bits: 32 },
-  // warm:      { proto: "NEC", code: "0xYOURCODE", bits: 32 },
-  // red:       { proto: "NEC", code: "0xYOURCODE", bits: 32 },
-  // ...
-};
-
-// Choose which map to use by default:
-let IR_MAP = IR_MAP_PRESET_NEC;
-
-async function sendIrByName(name) {
+async function sendPower(state) {
   const url = baseUrl();
   if (!url) throw new Error("Base URL is empty");
   const key = apiKey();
-  const cmd = IR_MAP[name];
-  if (!cmd) throw new Error(`IR command "${name}" not mapped yet`);
-
-  const qs = new URLSearchParams({
-    proto: cmd.proto,
-    code: cmd.code,
-    bits: String(cmd.bits || 32),
-    ...(key ? { key } : {}),
-  });
-
-  const res = await fetch(`${url}/ir?${qs.toString()}`, {
-    method: "POST",
-    mode: "cors",
-    keepalive: true,
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => res.statusText);
-    throw new Error(`HTTP ${res.status}: ${t}`);
-  }
-  return res.json().catch(() => ({}));
+  const qs = new URLSearchParams({ state });
+  if (key) qs.set("key", key);
+  return request(`${url}/power?${qs.toString()}`);
 }
-
-// Dev helper: try any raw hex quickly from console: window.tryIR("0x00FF02FD")
-window.tryIR = async (hex, proto = "NEC", bits = 32) => {
-  const url = baseUrl();
-  const key = apiKey();
-  const qs = new URLSearchParams({ proto, code: hex, bits: String(bits), ...(key ? { key } : {}) });
-  const res = await fetch(`${url}/ir?${qs.toString()}`, { method: "POST", mode: "cors" });
-  return res.ok;
-};
-
-// -----------------------------------------------------
-
 async function ping() {
   const url = baseUrl();
   if (!url) return setStatus("Not connected", "warn");
   try {
     const res = await fetch(`${url}/health`, { mode: "cors" });
-    if (res.ok) setStatus("Connected", "ok");
-    else setStatus("Unreachable", "bad");
+    setStatus(res.ok ? "Connected" : "Unreachable", res.ok ? "ok" : "bad");
   } catch {
     setStatus("Unreachable", "bad");
   }
 }
-
 function setStatus(msg, level = "warn") {
   statusText.textContent = msg;
   dot.style.background =
     level === "ok" ? "var(--ok)" : level === "bad" ? "var(--bad)" : "var(--warn)";
+  dot.style.boxShadow =
+    level === "ok"
+      ? "0 0 14px rgba(34,197,94,.5)"
+      : level === "bad"
+      ? "0 0 14px rgba(239,68,68,.5)"
+      : "0 0 14px rgba(245,158,11,.5)";
 }
 
-// --- Debounce for color dragging ---
-function debounce(fn, ms) {
-  let t;
-  return function (...args) {
-    clearTimeout(t);
-    t = setTimeout(() => fn.apply(this, args), ms);
-  };
-}
-
-const debouncedSend = debounce(async (hex) => {
-  try {
-    await sendColor(hex);
-    setStatus("Connected", "ok");
-  } catch (e) {
-    console.error(e);
-    setStatus("Error", "bad");
-    toast("Send failed");
-  }
-}, 120);
-
-// --- Init ---
+// --- Swatches (mapped to your learned button names) ---
 const defaultColors = [
-  ["Red", "#ff0000"],
-  ["Green", "#00ff00"],
-  ["Blue", "#0000ff"],
-  ["Yellow", "#ffff00"],
-  ["Orange", "#ff7a00"],
-  ["Purple", "#8000ff"],
-  ["Pink", "#ff33aa"],
-  ["Cyan", "#00ffff"],
-  ["White", "#ffffff"],
-  ["Warm", "#fff3d1"],
-  ["Cool", "#e7f1ff"],
-  ["Lime", "#bfff00"],
-  ["Teal", "#15c2b8"],
-  ["Magenta", "#ff00ff"],
-  ["Amber", "#ffbf00"],
-  ["Indigo", "#3f51b5"],
+  // name, hex, button slug (your firmware maps these to NEC codes)
+  ["Red", "#ff0000", "red1"],
+  ["Orange", "#ff8400ff", "red2"],
+  ["Orange-Yellow", "#ffbb00ff", "red3"],
+  ["Yellow-Orange", "#ffea00ff", "red4"],
+  ["Yellow", "#ffff00", "red5"],
+  ["Green", "#00ff44ff", "green1"],
+  ["Green-Cyan", "#00ffaeff", "green2"],
+  ["Cyan", "#00ffeaff", "green3"],
+  ["Blue-Cyan", "#00eeffff", "green4"],
+  ["Light-Blue", "#00d5ffff", "green5"],
+  ["Blue", "#0000ff", "blue1"],
+  ["Dusty-Blue", "#0095ffff", "blue2"],
+  ["Purple-Blue", "#9c7dffff", "blue3"],
+  ["Purple", "#8000ff", "blue4"],
+  ["Pink", "#ff33aa", "blue5"],
+  ["White", "#ffffff", "white"],
 ];
 
+let currentCode = "white";
+
+function setPreview(hexOrCss) {
+  preview.style.background = hexOrCss;
+  preview.textContent = typeof hexOrCss === "string" ? hexOrCss.toUpperCase().slice(0, 16) : "—";
+}
+
+// Build grid
 function buildSwatches() {
-  for (const [name, hex] of defaultColors) {
+  swatches.innerHTML = "";
+  for (const [name, fill, code] of defaultColors) {
     const btn = document.createElement("button");
     btn.className = "swatch";
     btn.title = name;
-    btn.dataset.hex = hex;
-    btn.style.background = hex;
-    btn.textContent = " ";
+    btn.style.background = fill;
     btn.addEventListener("click", async () => {
-      colorPicker.value = hex;
-      setPreview(hex);
+      currentCode = code;
+      setPreview(typeof fill === "string" ? fill : "#000");
       try {
-        await sendColor(hex);
+        await sendBtn(code);
         setStatus("Connected", "ok");
-        toast(`${name}`);
+        toast(name);
       } catch {
         setStatus("Error", "bad");
         toast("Send failed");
@@ -254,114 +132,101 @@ function buildSwatches() {
   }
 }
 
-function loadSaved() {
-  const cfg = getConfig();
-  // Default to ESP mDNS; swap to raw IP if you prefer (e.g., http://192.168.31.57)
-  document.getElementById("baseUrl").value = cfg.baseUrl || "http://ir-d1.local";
-  document.getElementById("authToken").value = cfg.authToken || ""; // used as ?key=
+// --- Brightness with press-and-hold auto-repeat ---
+function attachRepeater(el, code, intervalMs = 300) {
+  let t;
+  const fire = async () => {
+    try {
+      await sendBtn(code);
+      setStatus("Connected", "ok");
+    } catch {
+      setStatus("Error", "bad");
+      toast("Send failed");
+    }
+  };
+  const down = (e) => {
+    e.preventDefault();
+    fire();
+    t = setInterval(fire, intervalMs);
+  };
+  const up = () => {
+    clearInterval(t);
+    t = null;
+  };
+  el.addEventListener("mousedown", down);
+  el.addEventListener("touchstart", down, { passive: false });
+  ["mouseup", "mouseleave", "touchend", "touchcancel"].forEach((ev) => el.addEventListener(ev, up));
 }
 
+// --- Save / Load ---
+function loadSaved() {
+  const cfg = getConfig();
+  document.getElementById("baseUrl").value = cfg.baseUrl || "http://192.168.31.57";
+  document.getElementById("authToken").value = cfg.authToken || "";
+}
 function save() {
-  setConfig({
-    baseUrl: baseUrl(),
-    authToken: apiKey(),
-  });
+  setConfig({ baseUrl: baseUrl(), authToken: apiKey() });
   toast("Saved");
   ping();
 }
 
-// Event wiring
+// --- Wire up UI ---
 document.getElementById("saveBtn").addEventListener("click", save);
 document.getElementById("pingBtn").addEventListener("click", ping);
 
-document.getElementById("sendColorBtn").addEventListener("click", async () => {
-  const hex = colorPicker.value;
-  setPreview(hex);
+// Power
+$("#btnPowerOn").addEventListener("click", async () => {
   try {
-    await sendColor(hex);
+    await sendPower("on");
     setStatus("Connected", "ok");
-    toast("Color sent");
+    toast("Power ON");
+  } catch {
+    setStatus("Error", "bad");
+    toast("Send failed");
+  }
+});
+$("#btnPowerOff").addEventListener("click", async () => {
+  try {
+    await sendPower("off");
+    setStatus("Connected", "ok");
+    toast("Power OFF");
+  } catch {
+    setStatus("Error", "bad");
+    toast("Send failed");
+  }
+});
+$("#btnWhite").addEventListener("click", async () => {
+  try {
+    await sendBtn("white");
+    currentCode = "white";
+    setStatus("Connected", "ok");
+    toast("White");
   } catch {
     setStatus("Error", "bad");
     toast("Send failed");
   }
 });
 
-colorPicker.addEventListener("input", () => {
-  const hex = colorPicker.value;
-  setPreview(hex);
-  debouncedSend(hex);
-});
+// Brightness repeaters
+attachRepeater($("#btnDim"), "bright_down", 280);
+attachRepeater($("#btnBright"), "bright_up", 280);
 
-brightness.addEventListener("input", () => {
-  brightnessVal.textContent = `${brightness.value}%`;
-  debouncedSend(colorPicker.value);
-});
-
-// Mode/command buttons use IR mapping
-document.querySelectorAll(".modes button").forEach((btn) => {
-  btn.addEventListener("click", async () => {
+// Modes
+document.querySelectorAll(".mode").forEach((b) => {
+  b.addEventListener("click", async () => {
     try {
-      await sendIrByName(btn.dataset.mode);
+      await sendBtn(b.dataset.name);
       setStatus("Connected", "ok");
-      toast(`${btn.dataset.mode} mode`);
-    } catch (e) {
-      console.error(e);
+      toast(`${b.dataset.name} mode`);
+    } catch {
       setStatus("Error", "bad");
-      toast(e.message.includes("not mapped") ? "Map IR codes first" : "Send failed");
+      toast("Send failed");
     }
   });
-});
-
-// Power + white/warm buttons
-document.getElementById("btnOn").addEventListener("click", async () => {
-  try {
-    await sendIrByName("power_on");
-    setStatus("Connected", "ok");
-    toast("Power ON");
-  } catch (e) {
-    console.error(e);
-    setStatus("Error", "bad");
-    toast(e.message.includes("not mapped") ? "Map IR codes first" : "Send failed");
-  }
-});
-document.getElementById("btnOff").addEventListener("click", async () => {
-  try {
-    await sendIrByName("power_off");
-    setStatus("Connected", "ok");
-    toast("Power OFF");
-  } catch (e) {
-    console.error(e);
-    setStatus("Error", "bad");
-    toast(e.message.includes("not mapped") ? "Map IR codes first" : "Send failed");
-  }
-});
-document.getElementById("btnWhite").addEventListener("click", async () => {
-  try {
-    await sendIrByName("white");
-    setStatus("Connected", "ok");
-    toast("White");
-  } catch (e) {
-    console.error(e);
-    setStatus("Error", "bad");
-    toast(e.message.includes("not mapped") ? "Map IR codes first" : "Send failed");
-  }
-});
-document.getElementById("btnWarm").addEventListener("click", async () => {
-  try {
-    await sendIrByName("warm");
-    setStatus("Connected", "ok");
-    toast("Warm white");
-  } catch (e) {
-    console.error(e);
-    setStatus("Error", "bad");
-    toast(e.message.includes("not mapped") ? "Map IR codes first" : "Send failed");
-  }
 });
 
 // Boot
 buildSwatches();
 loadSaved();
-setPreview(colorPicker.value);
-brightnessVal.textContent = `${brightness.value}%`;
+setPreview("—");
 ping();
