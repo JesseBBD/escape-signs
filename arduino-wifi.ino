@@ -1,6 +1,6 @@
-// ===== Escape Sign Captive Portal + Local RGB + IR Send (ESP8266) =====
-// Board: LOLIN(WEMOS) D1 R2 & mini  (ESP8266)
-// Needs: IRremoteESP8266 by markszabo (install via Library Manager)
+// ===== Escape Sign Captive Portal + Live State Sync + Local RGB + IR Send (ESP8266) =====
+// Board: LOLIN(WEMOS) D1 R2 & mini (ESP8266)
+// Libs: IRremoteESP8266 (install via Library Manager)
 
 #include <ESP8266WiFi.h>
 #include <DNSServer.h>
@@ -9,12 +9,12 @@
 // ---- IR ----
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
-const uint16_t IR_PIN = D2; // HW-489 via transistor to D2 (GPIO4)
+const uint16_t IR_PIN = D2; // HW-489 via transistor
 IRsend irsend(IR_PIN);
 
 // ---- Wi-Fi / Captive Portal ----
 const char *AP_SSID = "ESCAPE-SIGN";
-const char *AP_PASS = "#BBD2025"; // or "" for open AP
+const char *AP_PASS = "#BBD2025";
 IPAddress apIP(192, 168, 4, 1);
 DNSServer dns;
 ESP8266WebServer server(80);
@@ -23,6 +23,11 @@ ESP8266WebServer server(80);
 const uint8_t PIN_R = D5; // GPIO14
 const uint8_t PIN_G = D6; // GPIO12
 const uint8_t PIN_B = D7; // GPIO13
+
+// ---- Shared state (for live sync) ----
+String currentHex = "#00A3FF";
+int currentLevel = 7;
+unsigned long currentTs = 0;
 
 // ---- UI Page ----
 const char *PAGE = R"HTML(
@@ -52,7 +57,7 @@ input[type=range]{width:100%}
 @keyframes fadeout{from{opacity:1}to{opacity:0;visibility:hidden}}
 .dot{width:10px;height:10px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:8px}
 </style></head><body>
-<header><h2>Escape Sign</h2><div class="pill"><span class="dot"></span>Connected to controller</div></header>
+<header><h2>Escape Sign</h2><div class="pill"><span class="dot"></span>Connected • Live</div></header>
 <div class="card row">
   <div class="controls">
     <label>Colour picker</label>
@@ -82,20 +87,48 @@ const colorPicker=$("#colorPicker"), brightness=$("#brightness"), bVal=$("#bVal"
 const toast=(m)=>{const t=$("#toast"); t.textContent=m||"Updated!"; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),1800);};
 const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
 function setPreview(hex,level){ preview.style.background=hex; preview.textContent=hex+"  •  b"+level; }
-const COLORS=["#FF0000","#00FF00","#0000FF","#FFFF00","#FF00FF","#00FFFF","#FFFFFF","#FFA500","#FF1493","#00A3FF","#33FF99","#FF66CC","#AAFF00","#FF9933","#A0AEC0","#111111"];
+const COLORS=["#FF0000","#00FF00","#0000FF","#FFFF00","#FF00FF","#00FFFF","#FFFFFF","#FFA500","#FF1493","#00A3FF","#33FF99","#FF66CC","#AAFF00","#FF9933","#A0AEC0","#111111;
 COLORS.forEach(c=>{ const b=document.createElement("button"); b.className="sw"; b.style.background=c; b.title=c;
   b.onclick=()=>{ colorPicker.value=c; setPreview(c,+brightness.value); send(c,+brightness.value); }; swatches.appendChild(b); });
+
 function current(){ return {hex: colorPicker.value.toUpperCase(), level:+brightness.value}; }
 function onChange(){ const {hex,level}=current(); setPreview(hex,level); nowHex.textContent=hex; }
 colorPicker.addEventListener("input", onChange);
 brightness.addEventListener("input", ()=>{ bVal.textContent=brightness.value; onChange(); });
 $("#apply").addEventListener("click", ()=>{ const {hex,level}=current(); send(hex,level); });
+
 async function send(hex, level){
-  try{ const u="/api/set?hex="+encodeURIComponent(hex)+"&b="+clamp(level,0,7);
-    const r=await fetch(u,{method:"POST"}); if(r.ok) toast("Updated!"); else toast("Error");
+  try{
+    const u="/api/set?hex="+encodeURIComponent(hex)+"&b="+clamp(level,0,7);
+    const r=await fetch(u,{method:"POST"});
+    if(r.ok) toast("Updated!"); else toast("Error");
   }catch(e){ toast("Offline?"); }
 }
+
+// --- Live polling of /api/state ---
+let lastTs = 0;
+async function poll(){
+  try{
+    const r = await fetch("/api/state", {cache:"no-store"});
+    if(!r.ok) return;
+    const s = await r.json(); // {hex,b,ts}
+    if (s && typeof s.ts === "number" && s.ts > lastTs){
+      lastTs = s.ts;
+      applyRemoteState(s.hex, s.b);
+    }
+  }catch(e){}
+}
+function applyRemoteState(hex, level){
+  // Update UI without echoing another POST
+  colorPicker.value = hex;
+  brightness.value = String(level);
+  bVal.textContent = String(level);
+  setPreview(hex, level);
+  nowHex.textContent = hex;
+}
+// Start polling
 onChange();
+setInterval(poll, 1000);
 </script></body></html>
 )HTML";
 
@@ -154,9 +187,7 @@ void driveLocalRGB(const String &hex, int level)
   analogWrite(PIN_B, gamma8((uint8_t)(b * s)));
 }
 
-// ---------- IR mapping ----------
-// Replace the NEC codes below with YOUR remote's learned codes.
-// These placeholders compile, but may not match your controller.
+// ---------- IR mapping (placeholders) ----------
 struct NecMap
 {
   const char *name;
@@ -164,17 +195,23 @@ struct NecMap
   const uint8_t r, g, b;
 };
 const NecMap PRESET_CODES[] = {
-    {"RED", 0xF720DF, 255, 0, 0},
-    {"GREEN", 0xF7A05F, 0, 255, 0},
-    {"BLUE", 0xF7609F, 0, 0, 255},
-    {"WHITE", 0xF7E01F, 255, 255, 255},
-    {"ORANGE", 0xF730CF, 255, 165, 0},
-    {"CYAN", 0xF7A857, 0, 255, 255},
-    {"MAGENTA", 0xF76897, 255, 0, 255},
-    // add the rest of your 24-key palette here...
+    {"Red", 0xF720DF, 255, 0, 0},
+    {"Orange", 0xF710EF, 255, 132, 0},
+    {"Orange-Yellow", 0xF730CF, 255, 187, 0},
+    {"Yellow-Orange", 0xF708F7, 255, 234, 0},
+    {"Yellow", 0xF728D7, 255, 255, 0},
+    {"Green", 0xF7A05F, 0, 255, 68},
+    {"Green-Cyan", 0xF7906F, 0, 255, 174},
+    {"Cyan", 0xF7B04F, 0, 255, 234},
+    {"Blue-Cyan", 0xF78877, 0, 238, 255},
+    {"Light-Blue", 0xF7A857, 0, 213, 255},
+    {"Blue", 0xF7609F, 0, 0, 255},
+    {"Dusty-Blue", 0xF750AF, 0, 149, 255},
+    {"Purple-Blue", 0xF7708F, 156, 125, 255},
+    {"Purple", 0xF748B7, 128, 0, 255},
+    {"Pink", 0xF76897, 255, 51, 170},
+    {"White", 0xF7E01F, 255, 255, 255},
 };
-
-// Find closest preset by Euclidean distance in RGB
 uint32_t mapHexToNec(const String &hex)
 {
   uint8_t r, g, b;
@@ -183,9 +220,7 @@ uint32_t mapHexToNec(const String &hex)
   uint32_t bestD = 0xFFFFFFFF;
   for (auto &p : PRESET_CODES)
   {
-    int dr = int(r) - int(p.r);
-    int dg = int(g) - int(p.g);
-    int db = int(b) - int(p.b);
+    int dr = int(r) - int(p.r), dg = int(g) - int(p.g), db = int(b) - int(p.b);
     uint32_t d = uint32_t(dr * dr + dg * dg + db * db);
     if (d < bestD)
     {
@@ -196,26 +231,31 @@ uint32_t mapHexToNec(const String &hex)
   return best;
 }
 
-// Some controllers support brightness UP/DOWN buttons.
-// If yours does, you can send those here based on level changes.
-// For now, we encode brightness into color choice only.
+// --- Apply state to hardware + remember it ---
 void sendIrColor(const String &hex, int level)
 {
-  // Always reflect locally for your SMD demo LED:
-  driveLocalRGB(hex, level);
+  // Update in-memory state
+  currentHex = hex;
+  currentLevel = constrain(level, 0, 7);
+  currentTs = millis(); // monotonic timestamp for clients
 
-  // Send IR color command (NEC example).
-  // Replace kNECBits=32 & irsend.sendNEC(...) with the right protocol for your remote.
+  // Local SMD demo LED
+  driveLocalRGB(currentHex, currentLevel);
+
+  // IR color command (NEC placeholder)
   const uint16_t kNECBits = 32;
-  uint32_t nec = mapHexToNec(hex);
+  uint32_t nec = mapHexToNec(currentHex);
   irsend.sendNEC(nec, kNECBits);
-
-  // If your controller needs a small gap between commands:
   delay(50);
 }
 
 // ---- HTTP handlers ----
-void handleRoot() { server.send(200, "text/html", PAGE); }
+void sendNoStore() { server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"); }
+void handleRoot()
+{
+  sendNoStore();
+  server.send(200, "text/html", PAGE);
+}
 bool captivePortal()
 {
   if (!isIp(server.hostHeader()))
@@ -230,31 +270,35 @@ void handleSet()
 {
   String hex = server.hasArg("hex") ? server.arg("hex") : "#FFFFFF";
   int b = server.hasArg("b") ? server.arg("b").toInt() : 7;
-  b = constrain(b, 0, 7);
   sendIrColor(hex, b);
-  server.send(200, "application/json", String("{\"ok\":true,\"hex\":\"") + hex + "\",\"b\":" + b + "}");
+  sendNoStore();
+  server.send(200, "application/json",
+              String("{\"ok\":true,\"hex\":\"") + currentHex + "\",\"b\":" + currentLevel + ",\"ts\":" + currentTs + "}");
+}
+void handleState()
+{
+  sendNoStore();
+  server.send(200, "application/json",
+              String("{\"hex\":\"") + currentHex + "\",\"b\":" + currentLevel + ",\"ts\":" + currentTs + "}");
 }
 void handleNotFound()
 {
   if (captivePortal())
     return;
-  server.send(200, "text/html", PAGE);
+  handleRoot();
 }
 
 // ---- Setup / Loop ----
 void setup()
 {
-  // PWM pins
   pinMode(PIN_R, OUTPUT);
   pinMode(PIN_G, OUTPUT);
   pinMode(PIN_B, OUTPUT);
   analogWriteRange(255);
-  driveLocalRGB("#000000", 0);
+  driveLocalRGB(currentHex, currentLevel);
 
-  // IR: begin ONCE (fixes your compile/runtime error)
-  irsend.begin(); // <-- returns void; no if-condition
+  irsend.begin(); // returns void
 
-  // Wi-Fi AP + captive DNS + HTTP
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
   WiFi.softAP(AP_SSID, AP_PASS);
@@ -262,9 +306,10 @@ void setup()
 
   server.on("/", handleRoot);
   server.on("/api/set", HTTP_POST, handleSet);
+  server.on("/api/state", HTTP_GET, handleState);
   server.on("/generate_204", handleRoot);        // Android
   server.on("/fwlink", handleRoot);              // Windows
-  server.on("/hotspot-detect.html", handleRoot); // iOS/macOS
+  server.on("/hotspot-detect.html", handleRoot); // Apple
   server.onNotFound(handleNotFound);
   server.begin();
 }
