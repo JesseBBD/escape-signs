@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Escape Sign • Crowd Vote</title>
+    <style>
+      :root {
+        --pad: 16px;
+        --radius: 16px;
+        --shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+      }
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        margin: 0;
+        background: #0b0f14;
+        color: #e8eef6;
+      }
+      header {
+        padding: var(--pad);
+        text-align: center;
+      }
+      .card {
+        background: #121922;
+        margin: var(--pad);
+        padding: var(--pad);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+      .bar {
+        display: flex;
+        gap: 8px;
+        align-items: stretch;
+        height: 60px;
+        margin-top: 12px;
+      }
+      .chunk {
+        border-radius: 10px;
+        min-width: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+      }
+      .chunk small {
+        color: #000;
+        font-weight: 700;
+        mix-blend-mode: screen;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(8, 40px);
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .sw {
+        width: 40px;
+        height: 40px;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      .pill {
+        padding: 6px 10px;
+        background: #0f1620;
+        border: 1px solid #2a3340;
+        border-radius: 999px;
+        font-size: 12px;
+        opacity: 0.9;
+      }
+      #toast {
+        visibility: hidden;
+        min-width: 160px;
+        background: #1a88ff;
+        color: #fff;
+        text-align: center;
+        border-radius: 999px;
+        padding: 10px 16px;
+        position: fixed;
+        left: 50%;
+        bottom: 24px;
+        transform: translateX(-50%);
+      }
+      #toast.show {
+        visibility: visible;
+        animation: fadein 0.2s, fadeout 0.2s 1.6s;
+      }
+      @keyframes fadein {
+        from {
+          opacity: 0;
+          transform: translate(-50%, 8px);
+        }
+        to {
+          opacity: 1;
+          transform: translate(-50%, 0);
+        }
+      }
+      @keyframes fadeout {
+        from {
+          opacity: 1;
+        }
+        to {
+          opacity: 0;
+          visibility: hidden;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h2>Escape Sign • Crowd Vote</h2>
+      <div class="pill">
+        Room <span id="room">ESC1</span> • vote every 5s • Leader: <span id="leader">—</span>
+      </div>
+    </header>
+    <div class="card">
+      <div>Live votes</div>
+      <div id="bar" class="bar" aria-label="Vote distribution"></div>
+      <div style="margin-top: 10px">Tap to vote:</div>
+      <div id="swatches" class="grid"></div>
+    </div>
+    <div id="toast">Voted!</div>
+
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
+      import {
+        getDatabase,
+        ref,
+        push,
+        onValue,
+      } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-database.js";
+
+      // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyA9L8ggCCiuZB0AEplEKlc7XYhzSOnwpRk",
+  authDomain: "escape-signs.firebaseapp.com",
+  databaseURL: "https://escape-signs-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "escape-signs",
+  storageBucket: "escape-signs.firebasestorage.app",
+  messagingSenderId: "182414223507",
+  appId: "1:182414223507:web:141f861962ee2741478566",
+  measurementId: "G-244TWGGCV0"
+};
+
+      const ROOM = "ESC1";
+      const ROOM_CODE = "1234"; // rotate per event
+
+      // Your IR palette
+      const PALETTE = [
+        "#FF0000",
+        "#FF8400",
+        "#FFBB00",
+        "#FFEA00",
+        "#FFFF00",
+        "#00FF44",
+        "#00FFAE",
+        "#00FFEA",
+        "#00EEFF",
+        "#00D5FF",
+        "#0000FF",
+        "#0095FF",
+        "#9C7DFF",
+        "#8000FF",
+        "#FF33AA",
+        "#FFFFFF",
+      ];
+      const LABELS = [
+        "Red",
+        "Orange",
+        "Orange-Yellow",
+        "Yellow-Orange",
+        "Yellow",
+        "Green",
+        "Green-Cyan",
+        "Cyan",
+        "Blue-Cyan",
+        "Light-Blue",
+        "Blue",
+        "Dusty-Blue",
+        "Purple-Blue",
+        "Purple",
+        "Pink",
+        "White",
+      ];
+
+      // UI helpers
+      const $ = (s) => document.querySelector(s);
+      $("#room").textContent = ROOM;
+      const bar = $("#bar"),
+        sw = $("#swatches"),
+        leaderEl = $("#leader");
+      const toast = (m) => {
+        const t = $("#toast");
+        t.textContent = m || "Voted!";
+        t.classList.add("show");
+        setTimeout(() => t.classList.remove("show"), 1800);
+      };
+
+      // Firebase
+      const app = initializeApp(firebaseConfig);
+      const db = getDatabase(app);
+      const tallyRef = ref(db, `escape-signs/rooms/${ROOM}/tally`);
+      const queueRef = ref(db, `escape-signs/rooms/${ROOM}/vote-queue`);
+
+      // Render live bar
+      function renderBar(counts = {}, total = 0) {
+        bar.innerHTML = "";
+        PALETTE.forEach((hex, i) => {
+          const k = hex.slice(1).toUpperCase();
+          const c = counts[k] || 0;
+          const pct = total > 0 ? Math.round((c / total) * 100) : 0;
+          const el = document.createElement("div");
+          el.className = "chunk";
+          el.style.background = hex;
+          el.style.flex = String(Math.max(c, 0.5));
+          el.innerHTML = `<small>${pct}%</small>`;
+          el.title = `${LABELS[i]} ${hex} — ${c} vote${c === 1 ? "" : "s"} (${pct}%)`;
+          bar.appendChild(el);
+        });
+      }
+      onValue(tallyRef, (snap) => {
+        const t = snap.val() || {};
+        renderBar(t.counts || {}, t.total || 0);
+        leaderEl.textContent = t.leader || "—";
+      });
+
+      // Session id (per device)
+      const session =
+        localStorage.getItem("voteSession") ||
+        (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+      localStorage.setItem("voteSession", session);
+
+      // Vote (backend enforces 5s; we show immediate feedback)
+      async function vote(hex) {
+        await push(queueRef, { hex, session, tsClient: Date.now(), code: ROOM_CODE });
+        toast("Voted!");
+      }
+
+      // Build swatches
+      PALETTE.forEach((hex, i) => {
+        const b = document.createElement("button");
+        b.className = "sw";
+        b.style.background = hex;
+        b.title = LABELS[i];
+        b.onclick = () => vote(hex);
+        sw.appendChild(b);
+      });
+    </script>
+  </body>
+</html>

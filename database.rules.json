@@ -1,0 +1,16 @@
+{
+  "rules": {
+    "escape-signs": {
+      "rooms": {
+        "$room": {
+          "tally": { ".read": true },
+          "vote-queue": {
+            "$id": {
+              ".write": "newData.child('code').val() === root.child('escape-signs/rooms/'+$room+'/code').val()"
+            }
+          }
+        }
+      }
+    }
+  }
+}
