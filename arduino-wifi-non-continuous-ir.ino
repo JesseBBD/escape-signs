@@ -11,18 +11,19 @@
 #include <stdlib.h>
 
 // ---- IR ----
-const uint16_t IR_PIN = D2; // HW-489 via transistor: SIG->D2, VCC->5V, GND->G
+const uint16_t IR_PIN = D5; // HW-489 via transistor: SIG->D2, VCC->5V, GND->G
 IRsend irsend(IR_PIN);
 
 // ---- Wi-Fi / Captive Portal ----
-const char *AP_SSID = "ESCAPE-SIGN";
+const char *AP_SSID = "BBD-SIGN";
 const char *AP_PASS = "#BBD2025";
-IPAddress apIP(192, 168, 4, 1);
+IPAddress apIP(192, 168, 5, 1);
 DNSServer dns;
 ESP8266WebServer server(80);
 
 // ---- Shared state (for live sync) ----
-String currentHex = "#00A3FF";
+// Start up as RED
+String currentHex = "#FF0000";
 int currentLevel = 7;        // 0..7 for UI; device doesn't drive local RGB anymore
 unsigned long currentTs = 0; // monotonic ts for clients
 
@@ -65,7 +66,7 @@ input[type=range]{width:100%}
 <div class="card row">
   <div class="controls">
     <label>Colour picker</label>
-    <input id="colorPicker" type="color" value="#00A3FF" />
+    <input id="colorPicker" type="color" value="#FF0000" />
     <div class="bar" style="margin-top:12px;">
       <div>
         <label style="margin-top:0;">Brightness (0–7)</label>
@@ -75,13 +76,13 @@ input[type=range]{width:100%}
     </div>
     <div class="bar" style="margin-top:12px;">
       <button id="apply" class="btn">Apply</button>
-      <div class="pill">Now: <span id="nowHex">#00A3FF</span></div>
+      <div class="pill">Now: <span id="nowHex">#FF0000</span></div>
     </div>
   </div>
   <div>
     <label>Quick swatches</label>
     <div id="swatches" class="grid" style="margin:8px 0 14px;"></div>
-    <div id="preview" class="preview">#00A3FF</div>
+    <div id="preview" class="preview">#FF0000</div>
   </div>
 </div>
 <div id="toast">Updated!</div>
@@ -312,6 +313,10 @@ void handleNotFound()
 void setup()
 {
     irsend.begin(); // init IR
+    delay(50);      // tiny settle before first send
+
+    // Fire a single IR code to set the letters RED on boot
+    sendIrColor("#FF0000", 7);
 
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
