@@ -171,3 +171,18 @@ input[type="password"]:focus {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
+.pill {
+  border: none;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  color: #111;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08) inset;
+}
+.pill:hover {
+  filter: brightness(0.92);
+}
+.muted {
+  color: #777;
+}

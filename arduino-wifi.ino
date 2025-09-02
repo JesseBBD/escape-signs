@@ -9,7 +9,7 @@
 // ---- IR ----
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
-const uint16_t IR_PIN = D2; // HW-489 via transistor
+const uint16_t IR_PIN = D5; // HW-489 via transistor
 IRsend irsend(IR_PIN);
 
 // ---- Wi-Fi / Captive Portal ----

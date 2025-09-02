@@ -4,6 +4,12 @@ const swatches = $("#swatches");
 const statusText = $("#statusText");
 const dot = $("#dot");
 const preview = $("#preview");
+const addToCycleToggle = $("#addToCycle");
+const cycleListEl = $("#cycleList");
+const cycleStartBtn = $("#cycleStart");
+const cycleStopBtn = $("#cycleStop");
+const cycleClearBtn = $("#cycleClear");
+const cycleIntervalInput = $("#cycleInterval");
 
 const toast = (msg) => {
   const el = document.getElementById("toast");
@@ -126,6 +132,108 @@ const defaultColors = [
   ["White", "#ffffff", "white"],
 ];
 
+// ===== Cycle playlist state =====
+let cycle = []; // array of {name, fill, code}
+let cycleTimer = null;
+let cycleIndex = 0;
+
+// Render cycle list pills
+function renderCycleList() {
+  cycleListEl.innerHTML = "";
+  if (!cycle.length) {
+    cycleListEl.innerHTML = '<span class="muted">No colours queued.</span>';
+    return;
+  }
+  cycle.forEach((item, i) => {
+    const pill = document.createElement("button");
+    pill.className = "pill";
+    pill.style.background = item.fill;
+    pill.title = `${item.name} (${item.code}) — click to remove`;
+    pill.textContent = item.name;
+    pill.addEventListener("click", () => {
+      cycle.splice(i, 1);
+      persistCycle();
+      renderCycleList();
+    });
+    cycleListEl.appendChild(pill);
+  });
+}
+
+// Persist cycle + interval + toggle
+function persistCycle() {
+  const cfg = getConfig();
+  cfg.cycle = cycle;
+  cfg.cycleInterval = parseFloat(cycleIntervalInput.value) || 3;
+  cfg.addToCycle = addToCycleToggle.checked;
+  setConfig(cfg);
+}
+
+// Restore cycle + interval + toggle
+function restoreCycle() {
+  const cfg = getConfig();
+  cycle = Array.isArray(cfg.cycle) ? cfg.cycle : [];
+  cycleIntervalInput.value = cfg.cycleInterval ? String(cfg.cycleInterval) : "3";
+  addToCycleToggle.checked = !!cfg.addToCycle;
+  renderCycleList();
+}
+
+// Start cycling
+function startCycle() {
+  if (cycleTimer) return; // already running
+  if (!cycle.length) {
+    toast("Add colours first");
+    return;
+  }
+  const intervalSec = Math.max(0.5, parseFloat(cycleIntervalInput.value) || 3);
+  cycleIntervalInput.value = String(intervalSec);
+  cycleIndex = 0;
+
+  const tick = async () => {
+    const item = cycle[cycleIndex % cycle.length];
+    cycleIndex++;
+
+    // Update preview immediately
+    setPreview(item.fill, item.name);
+    currentCode = item.code;
+
+    try {
+      await sendBtn(item.code);
+      setStatus("Connected", "ok");
+    } catch {
+      setStatus("Error", "bad");
+      toast("Send failed");
+    }
+
+    // schedule next
+    cycleTimer = setTimeout(tick, intervalSec * 1000);
+  };
+
+  // kick off first tick immediately
+  tick();
+  cycleStartBtn.disabled = true;
+  cycleStopBtn.disabled = false;
+}
+
+// Stop cycling
+function stopCycle() {
+  if (cycleTimer) {
+    clearTimeout(cycleTimer);
+    cycleTimer = null;
+  }
+  cycleStartBtn.disabled = false;
+  cycleStopBtn.disabled = true;
+}
+
+// Clear playlist
+function clearCycle() {
+  stopCycle();
+  cycle = [];
+  persistCycle();
+  renderCycleList();
+  toast("Cycle cleared");
+}
+
+// Build swatches with dual behavior (send vs add-to-cycle)
 function buildSwatches() {
   swatches.innerHTML = "";
   for (const [name, fill, code] of defaultColors) {
@@ -133,18 +241,29 @@ function buildSwatches() {
     btn.className = "swatch";
     btn.title = name;
     btn.style.background = fill;
+
     btn.addEventListener("click", async () => {
-      currentCode = code;
-      setPreview(fill, name); // update label + base color
-      try {
-        await sendBtn(code);
-        setStatus("Connected", "ok");
-        toast(name);
-      } catch {
-        setStatus("Error", "bad");
-        toast("Send failed");
+      if (addToCycleToggle.checked) {
+        // Add to playlist (allow duplicates to repeat more often)
+        cycle.push({ name, fill, code });
+        persistCycle();
+        renderCycleList();
+        toast(`Added ${name}`);
+      } else {
+        // Normal send
+        currentCode = code;
+        setPreview(fill, name); // update label + base color
+        try {
+          await sendBtn(code);
+          setStatus("Connected", "ok");
+          toast(name);
+        } catch {
+          setStatus("Error", "bad");
+          toast("Send failed");
+        }
       }
     });
+
     swatches.appendChild(btn);
   }
 }
@@ -179,7 +298,7 @@ function attachRepeater(el, code, step, intervalMs = 300) {
 // --- Save / Load ---
 function loadSaved() {
   const cfg = getConfig();
-  document.getElementById("baseUrl").value = cfg.baseUrl || "http://192.168.31.57";
+  document.getElementById("baseUrl").value = cfg.baseUrl || "http://192.168.0.20";
   document.getElementById("authToken").value = cfg.authToken || "";
   // start with White @ 100%
   setPreview("#ffffff", "White");
@@ -187,7 +306,13 @@ function loadSaved() {
   syncPreviewBrightness();
 }
 function save() {
-  setConfig({ baseUrl: baseUrl(), authToken: apiKey() });
+  setConfig({
+    baseUrl: baseUrl(),
+    authToken: apiKey(),
+    cycle,
+    cycleInterval: parseFloat(cycleIntervalInput.value) || 3,
+    addToCycle: addToCycleToggle.checked,
+  });
   toast("Saved");
   ping();
 }
@@ -251,4 +376,15 @@ document.querySelectorAll(".mode").forEach((b) => {
 // Boot
 buildSwatches();
 loadSaved();
+restoreCycle();
 ping();
+
+// Cycle controls
+cycleStartBtn.addEventListener("click", () => {
+  persistCycle();
+  startCycle();
+});
+cycleStopBtn.addEventListener("click", stopCycle);
+cycleClearBtn.addEventListener("click", clearCycle);
+cycleIntervalInput.addEventListener("change", persistCycle);
+addToCycleToggle.addEventListener("change", persistCycle);
