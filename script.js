@@ -11,6 +11,11 @@ const cycleStopBtn = $("#cycleStop");
 const cycleClearBtn = $("#cycleClear");
 const cycleIntervalInput = $("#cycleInterval");
 
+// NEW: Dim-between controls
+const dimToggle = $("#dimToggle");
+const dimTargetInput = $("#dimTarget");
+const dimDelayInput = $("#dimDelay");
+
 const toast = (msg) => {
   const el = document.getElementById("toast");
   el.textContent = msg;
@@ -19,6 +24,7 @@ const toast = (msg) => {
 };
 
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
 // --- Persistence ---
 const STORAGE_KEY = "pi-ir-remote";
@@ -111,6 +117,25 @@ function adjustBrightness(delta) {
   syncPreviewBrightness();
 }
 
+// Helpers to press brightness and reflect locally
+async function pressBrightness(code, presses, delayMs) {
+  for (let i = 0; i < presses; i++) {
+    try {
+      await sendBtn(code);
+      setStatus("Connected", "ok");
+    } catch {
+      setStatus("Error", "bad");
+      toast("Send failed");
+    }
+    adjustBrightness(code === "bright_up" ? +BRIGHT_STEP : -BRIGHT_STEP);
+    if (delayMs > 0) await sleep(delayMs);
+  }
+}
+function pressesNeeded(from, to) {
+  const diff = from - to;
+  return Math.max(0, Math.ceil(Math.abs(diff) / BRIGHT_STEP));
+}
+
 // --- Swatches (mapped to your learned button names) ---
 const defaultColors = [
   // name, hex, button slug (your firmware maps these to NEC codes)
@@ -159,21 +184,30 @@ function renderCycleList() {
   });
 }
 
-// Persist cycle + interval + toggle
+// Persist cycle + options
 function persistCycle() {
   const cfg = getConfig();
   cfg.cycle = cycle;
   cfg.cycleInterval = parseFloat(cycleIntervalInput.value) || 3;
   cfg.addToCycle = addToCycleToggle.checked;
+  cfg.dimBetween = dimToggle.checked;
+  cfg.dimTargetPct = clamp(parseFloat(dimTargetInput.value) || 70, 56, 100);
+  cfg.dimDelay = Math.max(0, parseInt(dimDelayInput.value || "120", 10));
   setConfig(cfg);
 }
 
-// Restore cycle + interval + toggle
+// Restore cycle + options
 function restoreCycle() {
   const cfg = getConfig();
   cycle = Array.isArray(cfg.cycle) ? cfg.cycle : [];
   cycleIntervalInput.value = cfg.cycleInterval ? String(cfg.cycleInterval) : "3";
   addToCycleToggle.checked = !!cfg.addToCycle;
+
+  // NEW: restore dim settings
+  dimToggle.checked = !!cfg.dimBetween;
+  dimTargetInput.value = cfg.dimTargetPct ? String(cfg.dimTargetPct) : "70";
+  dimDelayInput.value = cfg.dimDelay != null ? String(cfg.dimDelay) : "120";
+
   renderCycleList();
 }
 
@@ -189,13 +223,26 @@ function startCycle() {
   cycleIndex = 0;
 
   const tick = async () => {
+    const startedAt = performance.now();
     const item = cycle[cycleIndex % cycle.length];
     cycleIndex++;
 
-    // Update preview immediately
+    // Dim-between logic
+    const useDim = dimToggle.checked;
+    const dipPct = clamp(parseFloat(dimTargetInput.value) || 70, 56, 100);
+    const dipTarget = clamp(dipPct / 100, MIN_PREVIEW_BRIGHT, 1.0);
+    const pressGap = Math.max(0, parseInt(dimDelayInput.value || "120", 10));
+
+    const prevLevel = currentBrightness;
+
+    if (useDim && prevLevel > dipTarget + 1e-6) {
+      // number of presses to go down to dip target
+      await pressBrightness("bright_down", pressesNeeded(prevLevel, dipTarget), pressGap);
+    }
+
+    // Switch colour
     setPreview(item.fill, item.name);
     currentCode = item.code;
-
     try {
       await sendBtn(item.code);
       setStatus("Connected", "ok");
@@ -204,8 +251,15 @@ function startCycle() {
       toast("Send failed");
     }
 
-    // schedule next
-    cycleTimer = setTimeout(tick, intervalSec * 1000);
+    // Bring brightness back up to previous level
+    if (useDim && prevLevel > currentBrightness + 1e-6) {
+      await pressBrightness("bright_up", pressesNeeded(prevLevel, currentBrightness), pressGap);
+    }
+
+    // schedule next, trying to keep overall interval consistent
+    const elapsed = (performance.now() - startedAt) / 1000;
+    const remaining = Math.max(0, intervalSec - elapsed);
+    cycleTimer = setTimeout(tick, remaining * 1000);
   };
 
   // kick off first tick immediately
@@ -244,7 +298,7 @@ function buildSwatches() {
 
     btn.addEventListener("click", async () => {
       if (addToCycleToggle.checked) {
-        // Add to playlist (allow duplicates to repeat more often)
+        // Add to playlist (allow duplicates to weight a colour)
         cycle.push({ name, fill, code });
         persistCycle();
         renderCycleList();
@@ -252,7 +306,7 @@ function buildSwatches() {
       } else {
         // Normal send
         currentCode = code;
-        setPreview(fill, name); // update label + base color
+        setPreview(fill, name);
         try {
           await sendBtn(code);
           setStatus("Connected", "ok");
@@ -268,7 +322,7 @@ function buildSwatches() {
   }
 }
 
-// --- Brightness with press-and-hold auto-repeat ---
+// --- Brightness with press-and-hold auto-repeat (manual buttons) ---
 function attachRepeater(el, code, step, intervalMs = 300) {
   let t;
   const fire = async () => {
@@ -312,6 +366,9 @@ function save() {
     cycle,
     cycleInterval: parseFloat(cycleIntervalInput.value) || 3,
     addToCycle: addToCycleToggle.checked,
+    dimBetween: dimToggle.checked,
+    dimTargetPct: clamp(parseFloat(dimTargetInput.value) || 70, 56, 100),
+    dimDelay: Math.max(0, parseInt(dimDelayInput.value || "120", 10)),
   });
   toast("Saved");
   ping();
@@ -388,3 +445,8 @@ cycleStopBtn.addEventListener("click", stopCycle);
 cycleClearBtn.addEventListener("click", clearCycle);
 cycleIntervalInput.addEventListener("change", persistCycle);
 addToCycleToggle.addEventListener("change", persistCycle);
+
+// NEW: persist dim settings live
+dimToggle.addEventListener("change", persistCycle);
+dimTargetInput.addEventListener("change", persistCycle);
+dimDelayInput.addEventListener("change", persistCycle);
