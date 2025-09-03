@@ -3,13 +3,17 @@
     "escape-signs": {
       "rooms": {
         "$room": {
+          "current": {
+            ".read": true,
+            ".write": "auth != null"
+          },
+          "brightness": { ".read": true },
           "tally": { ".read": true },
           "vote-queue": {
             "$id": {
               ".write": "newData.child('code').val() === root.child('escape-signs/rooms/'+$room+'/code').val()"
             }
-          }
-        }
+        }}
       }
     }
   }
