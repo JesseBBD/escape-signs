@@ -24,45 +24,44 @@
       .label-row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:14px;opacity:.9}
       .label-row .total{opacity:.8}
 
-      /* Vote distribution bar */
+      /* Vote distribution: single stacked bar */
       .bar{
-        display:flex;gap:8px;align-items:flex-end;height:72px;margin-top:22px; /* extra top space for badges */
-        overflow:visible; /* allow badges to float above */
+        display:flex;
+        height:72px;
+        margin-top:28px;
+        border-radius:14px;
+        overflow:hidden;
+        position:relative;
       }
       .chunk{
-        position:relative;border-radius:12px;min-width:36px;
+        position:relative;
         display:flex;align-items:center;justify-content:center;
-        outline:2px solid transparent;transition:box-shadow 120ms ease, outline-color 120ms ease;
-      }
-      /* Count badge above each chunk */
-      .badge-top{
-        position:absolute;top:-18px;left:50%;transform:translateX(-50%);
-        min-width:22px;height:22px;padding:0 8px;border-radius:999px;
-        background:#0f1620;border:1px solid #2a3340;color:#cfe2ff;
-        font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center;
-        box-shadow:0 2px 6px rgba(0,0,0,.3);
-        white-space:nowrap;
+        transition:flex 200ms ease;
       }
       .chunk .label{
-        display:grid;place-items:center;text-align:center;line-height:1.05;
+        text-align:center;line-height:1.1;
         color:#000;mix-blend-mode:screen;text-shadow:0 1px 2px rgba(0,0,0,.35);
+        font-weight:800;font-size:clamp(12px,2.5vw,16px);
       }
-      .chunk .count{display:none} /* count is moved to the badge now */
-      .chunk .pct{font-weight:700;font-size:clamp(11px,2.4vw,14px);opacity:.95}
-
-      /* Winner: ring + glow (no scale, no overlap) */
+      .badge-top{
+        position:absolute;top:-22px;left:50%;transform:translateX(-50%);
+        min-width:24px;height:22px;padding:0 8px;border-radius:999px;
+        background:#0f1620;border:1px solid #2a3340;color:#cfe2ff;
+        font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;
+        box-shadow:0 2px 6px rgba(0,0,0,.3);
+      }
       .chunk.winner{
-        outline-color:#fff;
-        box-shadow:0 0 0 3px rgba(255,255,255,.28), 0 6px 18px rgba(0,0,0,.35);
+        outline:2px solid #fff;
+        z-index:1;
       }
 
-      /* Swatch grid (2 rows x 5 cols) */
+      /* Swatch grid (2 rows × 5 cols) */
       .grid{
-        display:grid;grid-template-columns:repeat(5,48px);gap:12px;
-        margin-top:14px;justify-content:center;
+        display:grid;grid-template-columns:repeat(5,56px);gap:14px;
+        margin-top:20px;justify-content:center;
       }
       .sw{
-        width:48px;height:48px;border:none;border-radius:12px;cursor:pointer;
+        width:56px;height:56px;border:none;border-radius:14px;cursor:pointer;
         box-shadow:inset 0 0 0 1px rgba(0,0,0,.25);
         transition:transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
       }
@@ -80,27 +79,13 @@
       #toast.show{visibility:visible;animation:fadein .2s, fadeout .2s 1.6s}
       @keyframes fadein{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
       @keyframes fadeout{from{opacity:1}to{opacity:0;visibility:hidden}}
-
-      /* Mobile tweaks */
-      @media (max-width:560px){
-        .bar{height:96px;gap:6px}
-        .chunk{min-width:44px;border-radius:10px}
-        .badge-top{top:-16px;height:20px;min-width:20px;font-size:11px}
-        .grid{grid-template-columns:repeat(5,44px);gap:10px}
-        .sw{width:44px;height:44px;border-radius:10px}
-      }
-      @media (max-width:380px){
-        .grid{grid-template-columns:repeat(5,40px);gap:8px}
-        .sw{width:40px;height:40px}
-      }
     </style>
   </head>
   <body>
     <header>
       <h2>#BBD Sign • Crowd Vote</h2>
       <div class="pill">
-        Room <span id="room">ESC1</span> • vote every <b id="cooldownLabel">5s</b> •
-        Leader: <span id="leader">—</span> • <span class="total">Total: <span id="totalVotes">0</span></span>
+        Vote every <b id="cooldownLabel">5s</b> • <span class="total">Total: <span id="totalVotes">0</span></span>
       </div>
     </header>
 
@@ -120,7 +105,6 @@
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
       import { getDatabase, ref, push, onValue } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-database.js";
 
-      // Firebase config
       const firebaseConfig = {
         apiKey: "AIzaSyA9L8ggCCiuZB0AEplEKlc7XYhzSOnwpRk",
         authDomain: "escape-signs.firebaseapp.com",
@@ -132,152 +116,70 @@
         measurementId: "G-244TWGGCV0",
       };
 
-      const ROOM = "ESC1";
-      const ROOM_CODE = "1234";
-      const COOLDOWN_MS = 5000;
-      const SHOW_UPDATED_PILL = false;
+      const ROOM="ESC1", ROOM_CODE="1234", COOLDOWN_MS=5000;
+      const PALETTE=["#FF0000","#FF8400","#FFEA00","#00FF44","#00FFAE","#00D5FF","#0000FF","#9C7DFF","#FF33AA","#FFFFFF"];
+      const LABELS=["Red","Orange","Yellow","Green","Cyan","Light-Blue","Dark-Blue","Purple","Pink","White"];
 
-      const PALETTE = [
-        "#FF0000","#FF8400","#FFEA00","#00FF44","#00FFAE",
-        "#00D5FF","#0000FF","#9C7DFF","#FF33AA","#FFFFFF",
-      ];
-      const LABELS = [
-        "Red","Orange","Yellow","Green","Cyan",
-        "Light-Blue","Dark-Blue","Purple","Pink","White",
-      ];
+      const $=(s)=>document.querySelector(s);
+      $("#room").textContent=ROOM;
+      const bar=$("#bar"),sw=$("#swatches"),leaderEl=$("#leader"),cooldownLabel=$("#cooldownLabel"),totalVotesEl=$("#totalVotes");
 
-      // Elements
-      const $ = (s)=>document.querySelector(s);
-      $("#room").textContent = ROOM;
-      const bar = $("#bar"), sw = $("#swatches"), leaderEl = $("#leader");
-      const cooldownLabel = $("#cooldownLabel");
-      const totalVotesEl = $("#totalVotes");
-      const updatedEl = $("#lastUpdated");
+      const app=initializeApp(firebaseConfig);
+      const db=getDatabase(app);
+      const tallyRef=ref(db,`escape-signs/rooms/${ROOM}/tally`);
+      const queueRef=ref(db,`escape-signs/rooms/${ROOM}/vote-queue`);
 
-      const toast = (m)=>{
-        const t=$("#toast"); t.textContent=m||"Voted!"; t.classList.add("show");
-        setTimeout(()=>t.classList.remove("show"),1800);
-      };
-
-      // Firebase
-      const app = initializeApp(firebaseConfig);
-      const db = getDatabase(app);
-      const tallyRef = ref(db, `escape-signs/rooms/${ROOM}/tally`);
-      const queueRef = ref(db, `escape-signs/rooms/${ROOM}/vote-queue`);
-
-      // Build swatches (2 rows x 5)
-      const buttons = [];
-      PALETTE.forEach((hex, i)=>{
-        const b = document.createElement("button");
-        b.className = "sw";
-        b.style.background = hex;
-        b.title = LABELS[i];
-        b.setAttribute("aria-label", `Vote ${LABELS[i]} ${hex}`);
-        b.addEventListener("click", ()=>vote(hex));
-        sw.appendChild(b);
-        buttons.push(b);
+      const buttons=[];
+      PALETTE.forEach((hex,i)=>{
+        const b=document.createElement("button");
+        b.className="sw";b.style.background=hex;b.title=LABELS[i];
+        b.setAttribute("aria-label",`Vote ${LABELS[i]} ${hex}`);
+        b.addEventListener("click",()=>vote(hex));
+        sw.appendChild(b);buttons.push(b);
       });
 
-      // Cooldown state
-      let cooldownUntil = 0, cooldownTimer = null;
-      const setButtonsDisabled = (disabled)=>buttons.forEach((b)=>b.disabled=disabled);
-      function startCooldown(){
-        cooldownUntil = Date.now() + COOLDOWN_MS;
-        setButtonsDisabled(true);
-        tickCooldown();
-        if (cooldownTimer) clearInterval(cooldownTimer);
-        cooldownTimer = setInterval(()=>{
-          if (Date.now() >= cooldownUntil){
-            clearInterval(cooldownTimer); cooldownTimer = null;
-            setButtonsDisabled(false);
-            cooldownLabel.textContent = `${COOLDOWN_MS/1000}s`;
-          } else { tickCooldown(); }
-        }, 200);
-      }
-      function tickCooldown(){
-        const ms = Math.max(0, cooldownUntil - Date.now());
-        const secs = Math.ceil(ms/1000);
-        cooldownLabel.textContent = `${secs}s`;
-      }
+      let cooldownUntil=0,cooldownTimer=null;
+      const setButtonsDisabled=(d)=>buttons.forEach(b=>b.disabled=d);
+      function startCooldown(){cooldownUntil=Date.now()+COOLDOWN_MS;setButtonsDisabled(true);tickCooldown();
+        if(cooldownTimer)clearInterval(cooldownTimer);
+        cooldownTimer=setInterval(()=>{
+          if(Date.now()>=cooldownUntil){clearInterval(cooldownTimer);cooldownTimer=null;setButtonsDisabled(false);cooldownLabel.textContent=`${COOLDOWN_MS/1000}s`;}
+          else{tickCooldown();}
+        },200);}
+      function tickCooldown(){const ms=Math.max(0,cooldownUntil-Date.now());const s=Math.ceil(ms/1000);cooldownLabel.textContent=`${s}s`;}
 
-      // Session id (per device)
-      const session = localStorage.getItem("voteSession")
-        || (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
-      localStorage.setItem("voteSession", session);
+      const session=localStorage.getItem("voteSession")||(crypto.randomUUID?crypto.randomUUID():String(Math.random()).slice(2));
+      localStorage.setItem("voteSession",session);
 
-      async function vote(hex){
-        if (Date.now() < cooldownUntil) return;
-        try{
-          await push(queueRef, { hex, session, tsClient: Date.now(), code: ROOM_CODE });
-          toast("Voted!");
-        }catch(e){
-          toast("Failed to vote"); console.warn(e);
-        }finally{
-          startCooldown();
-        }
-      }
+      async function vote(hex){if(Date.now()<cooldownUntil)return;
+        try{await push(queueRef,{hex,session,tsClient:Date.now(),code:ROOM_CODE});toast("Voted!");}
+        catch(e){toast("Failed to vote");console.warn(e);}
+        finally{startCooldown();}}
 
-      // Render bar with % label inside and count badge above
-      function renderBar(counts={}, total=0, leaderKey=null){
-        bar.innerHTML = "";
+      function toast(m){const t=$("#toast");t.textContent=m||"Voted!";t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1800);}
 
-        // Compute leader if not provided
-        let computedLeader = leaderKey;
-        if (!computedLeader){
-          let best = -Infinity, bestKey = null;
-          for (const [k, v] of Object.entries(counts)){
-            const n = Number(v) || 0;
-            if (n > best){ best = n; bestKey = k; }
-          }
-          computedLeader = bestKey;
-        }
-
+      function renderBar(counts={},total=0,leaderKey=null){
+        bar.innerHTML="";
+        let computedLeader=leaderKey;
+        if(!computedLeader){let best=-Infinity,bestKey=null;for(const[k,v]of Object.entries(counts)){const n=Number(v)||0;if(n>best){best=n;bestKey=k;}}computedLeader=bestKey;}
         PALETTE.forEach((hex)=>{
-          const k = hex.slice(1).toUpperCase();
-          const c = Number(counts[k] || 0);
-          const pct = total > 0 ? Math.round((c/total)*100) : 0;
-
-          const el = document.createElement("div");
-          el.className = "chunk";
-          if (computedLeader && k === String(computedLeader).replace("#","").toUpperCase()){
-            el.classList.add("winner");
-          }
-          el.style.background = hex;
-          el.style.flex = String(Math.max(c, 0.5));
-          el.title = `${hex} — ${c} vote${c===1?"":"s"} (${pct}%)`;
-
-          // badge above (count)
-          const badge = document.createElement("span");
-          badge.className = "badge-top";
-          badge.textContent = String(c);
-          el.appendChild(badge);
-
-          // % label inside the chunk
-          const label = document.createElement("div");
-          label.className = "label";
-          label.innerHTML = `<div class="pct">${pct}%</div>`;
-          el.appendChild(label);
-
+          const k=hex.slice(1).toUpperCase();
+          const c=Number(counts[k]||0);const pct=total>0?Math.round((c/total)*100):0;
+          const el=document.createElement("div");el.className="chunk";
+          if(computedLeader&&k===String(computedLeader).replace("#","").toUpperCase())el.classList.add("winner");
+          el.style.background=hex;
+          el.style.flex=String(c); // flex proportional to count
+          el.title=`${hex} — ${c} vote${c===1?"":"s"} (${pct}%)`;
+          const badge=document.createElement("span");badge.className="badge-top";badge.textContent=String(c);el.appendChild(badge);
+          const label=document.createElement("div");label.className="label";label.textContent=`${pct}%`;el.appendChild(label);
           bar.appendChild(el);
         });
       }
 
-      // Live updates from RTDB
       onValue(tallyRef,(snap)=>{
-        const t = snap.val() || {};
-        const counts = t.counts || {};
-        const total = Number(t.total || 0);
-        const leader = t.leader || null;
-        const leaderKey = leader ? leader.replace("#","").toUpperCase() : null;
-
-        totalVotesEl.textContent = total;
-        if (SHOW_UPDATED_PILL){
-          updatedEl.style.display = "inline-block";
-          updatedEl.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
-        }
-
-        renderBar(counts, total, leaderKey);
-        leaderEl.textContent = leader || "—";
+        const t=snap.val()||{};const counts=t.counts||{};const total=Number(t.total||0);
+        const leader=t.leader||null;const leaderKey=leader?leader.replace("#","").toUpperCase():null;
+        totalVotesEl.textContent=total;renderBar(counts,total,leaderKey);leaderEl.textContent=leader||"—";
       });
     </script>
   </body>
