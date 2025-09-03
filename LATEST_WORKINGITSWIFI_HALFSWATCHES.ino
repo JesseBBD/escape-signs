@@ -1,4 +1,4 @@
-// ===== Escape Sign Captive Portal + Live State Sync + Local RGB + IR Send (ESP8266) =====
+// ===== Escape Sign Captive Portal + Live State Sync + IR Send (ESP8266) =====
 // Board: LOLIN(WEMOS) D1 R2 & mini (ESP8266)
 // Libs: IRremoteESP8266 (install via Library Manager)
 
@@ -14,15 +14,10 @@ IRsend irsend(IR_PIN);
 
 // ---- Wi-Fi / Captive Portal ----
 const char *AP_SSID = "ESCAPE-SIGN";
-const char *AP_PASS = "#I<3BBD";
+const char *AP_PASS = "#BBD2025";
 IPAddress apIP(192, 168, 4, 1);
 DNSServer dns;
 ESP8266WebServer server(80);
-
-// ---- Local RGB (common-cathode SMD via resistors) ----
-const uint8_t PIN_R = D5; // GPIO14
-const uint8_t PIN_G = D6; // GPIO12
-const uint8_t PIN_B = D7; // GPIO13
 
 // ---- Shared state (for live sync) ----
 String currentHex = "#00A3FF";
@@ -105,13 +100,12 @@ async function send(hex, level){
   }catch(e){ toast("Offline?"); }
 }
 
-// --- Live polling of /api/state ---
 let lastTs = 0;
 async function poll(){
   try{
     const r = await fetch("/api/state", {cache:"no-store"});
     if(!r.ok) return;
-    const s = await r.json(); // {hex,b,ts}
+    const s = await r.json();
     if (s && typeof s.ts === "number" && s.ts > lastTs){
       lastTs = s.ts;
       applyRemoteState(s.hex, s.b);
@@ -119,14 +113,12 @@ async function poll(){
   }catch(e){}
 }
 function applyRemoteState(hex, level){
-  // Update UI without echoing another POST
   colorPicker.value = hex;
   brightness.value = String(level);
   bVal.textContent = String(level);
   setPreview(hex, level);
   nowHex.textContent = hex;
 }
-// Start polling
 onChange();
 setInterval(poll, 1000);
 </script></body></html>
@@ -135,64 +127,43 @@ setInterval(poll, 1000);
 // ---- Helpers ----
 bool isIp(String s)
 {
-  for (size_t i = 0; i < s.length(); i++)
-  {
-    char c = s[i];
-    if (c != '.' && (c < '0' || c > '9'))
-      return false;
-  }
-  return true;
+    for (size_t i = 0; i < s.length(); i++)
+    {
+        char c = s[i];
+        if (c != '.' && (c < '0' || c > '9'))
+            return false;
+    }
+    return true;
 }
 String toStringIp(IPAddress ip) { return String(ip[0]) + "." + ip[1] + "." + ip[2] + "." + ip[3]; }
 
-uint8_t gamma8(uint8_t x)
-{
-  float xf = x / 255.0f;
-  xf = powf(xf, 2.2f);
-  return (uint8_t)(xf * 255.0f + 0.5f);
-}
 void hexToRgb(const String &hex, uint8_t &r, uint8_t &g, uint8_t &b)
 {
-  char buf[7];
-  int j = 0;
-  for (int i = 0; i < hex.length() && j < 6; i++)
-  {
-    char c = hex[i];
-    if (c == '#')
-      continue;
-    if (isxdigit(c))
-      buf[j++] = c;
-  }
-  while (j < 6)
-    buf[j++] = '0';
-  buf[6] = 0;
-  unsigned long v = strtoul(buf, nullptr, 16);
-  r = (v >> 16) & 0xFF;
-  g = (v >> 8) & 0xFF;
-  b = v & 0xFF;
-}
-float levelToScale(int level)
-{
-  level = constrain(level, 0, 7);
-  const float s[8] = {0.00f, 0.08f, 0.16f, 0.28f, 0.42f, 0.58f, 0.78f, 1.00f};
-  return s[level];
-}
-void driveLocalRGB(const String &hex, int level)
-{
-  uint8_t r, g, b;
-  hexToRgb(hex, r, g, b);
-  float s = levelToScale(level);
-  analogWrite(PIN_R, gamma8((uint8_t)(r * s)));
-  analogWrite(PIN_G, gamma8((uint8_t)(g * s)));
-  analogWrite(PIN_B, gamma8((uint8_t)(b * s)));
+    char buf[7];
+    int j = 0;
+    for (int i = 0; i < hex.length() && j < 6; i++)
+    {
+        char c = hex[i];
+        if (c == '#')
+            continue;
+        if (isxdigit(c))
+            buf[j++] = c;
+    }
+    while (j < 6)
+        buf[j++] = '0';
+    buf[6] = 0;
+    unsigned long v = strtoul(buf, nullptr, 16);
+    r = (v >> 16) & 0xFF;
+    g = (v >> 8) & 0xFF;
+    b = v & 0xFF;
 }
 
-// ---------- IR mapping (placeholders) ----------
+// ---------- IR mapping ----------
 struct NecMap
 {
-  const char *name;
-  uint32_t code;
-  const uint8_t r, g, b;
+    const char *name;
+    uint32_t code;
+    const uint8_t r, g, b;
 };
 const NecMap PRESET_CODES[] = {
     {"Red", 0xF720DF, 255, 0, 0},
@@ -214,108 +185,133 @@ const NecMap PRESET_CODES[] = {
 };
 uint32_t mapHexToNec(const String &hex)
 {
-  uint8_t r, g, b;
-  hexToRgb(hex, r, g, b);
-  uint32_t best = PRESET_CODES[0].code;
-  uint32_t bestD = 0xFFFFFFFF;
-  for (auto &p : PRESET_CODES)
-  {
-    int dr = int(r) - int(p.r), dg = int(g) - int(p.g), db = int(b) - int(p.b);
-    uint32_t d = uint32_t(dr * dr + dg * dg + db * db);
-    if (d < bestD)
+    uint8_t r, g, b;
+    hexToRgb(hex, r, g, b);
+    uint32_t best = PRESET_CODES[0].code;
+    uint32_t bestD = 0xFFFFFFFF;
+    for (auto &p : PRESET_CODES)
     {
-      bestD = d;
-      best = p.code;
+        int dr = int(r) - int(p.r), dg = int(g) - int(p.g), db = int(b) - int(p.b);
+        uint32_t d = uint32_t(dr * dr + dg * dg + db * db);
+        if (d < bestD)
+        {
+            bestD = d;
+            best = p.code;
+        }
     }
-  }
-  return best;
+    return best;
 }
 
 // --- Apply state to hardware + remember it ---
 void sendIrColor(const String &hex, int level)
 {
-  // Update in-memory state
-  currentHex = hex;
-  currentLevel = constrain(level, 0, 7);
-  currentTs = millis(); // monotonic timestamp for clients
+    currentHex = hex;
+    currentLevel = constrain(level, 0, 7);
+    currentTs = millis();
 
-  // Local SMD demo LED
-  driveLocalRGB(currentHex, currentLevel);
-
-  // IR color command (NEC placeholder)
-  const uint16_t kNECBits = 32;
-  uint32_t nec = mapHexToNec(currentHex);
-  irsend.sendNEC(nec, kNECBits);
-  delay(50);
+    const uint16_t kNECBits = 32;
+    uint32_t nec = mapHexToNec(currentHex);
+    irsend.sendNEC(nec, kNECBits);
+    delay(50);
 }
 
 // ---- HTTP handlers ----
 void sendNoStore() { server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"); }
 void handleRoot()
 {
-  sendNoStore();
-  server.send(200, "text/html", PAGE);
+    sendNoStore();
+    server.send(200, "text/html", PAGE);
 }
 bool captivePortal()
 {
-  if (!isIp(server.hostHeader()))
-  {
-    server.sendHeader("Location", String("http://") + toStringIp(server.client().localIP()) + "/", true);
-    server.send(302, "text/plain", "");
-    return true;
-  }
-  return false;
+    if (!isIp(server.hostHeader()))
+    {
+        server.sendHeader("Location", String("http://") + toStringIp(server.client().localIP()) + "/", true);
+        server.send(302, "text/plain", "");
+        return true;
+    }
+    return false;
 }
 void handleSet()
 {
-  String hex = server.hasArg("hex") ? server.arg("hex") : "#FFFFFF";
-  int b = server.hasArg("b") ? server.arg("b").toInt() : 7;
-  sendIrColor(hex, b);
-  sendNoStore();
-  server.send(200, "application/json",
-              String("{\"ok\":true,\"hex\":\"") + currentHex + "\",\"b\":" + currentLevel + ",\"ts\":" + currentTs + "}");
+    String hex = server.hasArg("hex") ? server.arg("hex") : "#FFFFFF";
+    int b = server.hasArg("b") ? server.arg("b").toInt() : 7;
+    sendIrColor(hex, b);
+    sendNoStore();
+    server.send(200, "application/json",
+                String("{\"ok\":true,\"hex\":\"") + currentHex + "\",\"b\":" + currentLevel + ",\"ts\":" + currentTs + "}");
 }
 void handleState()
 {
-  sendNoStore();
-  server.send(200, "application/json",
-              String("{\"hex\":\"") + currentHex + "\",\"b\":" + currentLevel + ",\"ts\":" + currentTs + "}");
+    sendNoStore();
+    server.send(200, "application/json",
+                String("{\"hex\":\"") + currentHex + "\",\"b\":" + currentLevel + ",\"ts\":" + currentTs + "}");
 }
 void handleNotFound()
 {
-  if (captivePortal())
-    return;
-  handleRoot();
+    if (captivePortal())
+        return;
+    handleRoot();
 }
 
 // ---- Setup / Loop ----
 void setup()
 {
-  pinMode(PIN_R, OUTPUT);
-  pinMode(PIN_G, OUTPUT);
-  pinMode(PIN_B, OUTPUT);
-  analogWriteRange(255);
-  driveLocalRGB(currentHex, currentLevel);
+    // Debug
+    Serial.begin(115200);
+    delay(50);
+    Serial.println("\n[Boot] Starting Escape-Sign AP + IR");
 
-  irsend.begin(); // returns void
+    // IR
+    irsend.begin();
 
-  WiFi.mode(WIFI_AP);
-  WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
-  WiFi.softAP(AP_SSID, AP_PASS);
-  dns.start(53, "*", apIP);
+    // Make Wi-Fi init deterministic
+    WiFi.persistent(false);
+    WiFi.disconnect(true); // clear any saved STA
+    delay(100);
 
-  server.on("/", handleRoot);
-  server.on("/api/set", HTTP_POST, handleSet);
-  server.on("/api/state", HTTP_GET, handleState);
-  server.on("/generate_204", handleRoot);        // Android
-  server.on("/fwlink", handleRoot);              // Windows
-  server.on("/hotspot-detect.html", handleRoot); // Apple
-  server.onNotFound(handleNotFound);
-  server.begin();
+    // Force AP-only mode
+    WiFi.mode(WIFI_OFF);
+    delay(50);
+    WiFi.mode(WIFI_AP);
+
+    // Radio tweaks (optional but helps range/stability)
+    wifi_set_phy_mode(PHY_MODE_11N); // 802.11n
+    WiFi.setOutputPower(20.5f);      // max ~20.5 dBm
+
+    // Fixed AP config on channel 1 to avoid reg. quirks
+    bool okCfg = WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+    Serial.printf("[WiFi] softAPConfig: %s\n", okCfg ? "OK" : "FAIL");
+
+    // SSID visible, channel=1, max_conn=4
+    const int channel = 1;
+    const bool hidden = false;
+    const int maxConn = 4;
+    bool okAP = WiFi.softAP(AP_SSID, AP_PASS, channel, hidden, maxConn);
+    Serial.printf("[WiFi] softAP: %s  SSID:%s  PASS:%s  CH:%d\n",
+                  okAP ? "OK" : "FAIL", AP_SSID, AP_PASS, channel);
+
+    IPAddress ip = WiFi.softAPIP();
+    Serial.printf("[WiFi] AP IP: %s\n", ip.toString().c_str());
+
+    // DNS captive portal
+    bool dnsOk = dns.start(53, "*", apIP);
+    Serial.printf("[DNS ] start: %s\n", dnsOk ? "OK" : "FAIL");
+
+    // HTTP routes
+    server.on("/", handleRoot);
+    server.on("/api/set", HTTP_POST, handleSet);
+    server.on("/api/state", HTTP_GET, handleState);
+    server.on("/generate_204", handleRoot);        // Android
+    server.on("/fwlink", handleRoot);              // Windows
+    server.on("/hotspot-detect.html", handleRoot); // Apple
+    server.onNotFound(handleNotFound);
+    server.begin();
+    Serial.println("[HTTP] Server started");
 }
 
 void loop()
 {
-  dns.processNextRequest();
-  server.handleClient();
+    dns.processNextRequest();
+    server.handleClient();
 }

@@ -352,7 +352,7 @@ function attachRepeater(el, code, step, intervalMs = 300) {
 // --- Save / Load ---
 function loadSaved() {
   const cfg = getConfig();
-  document.getElementById("baseUrl").value = cfg.baseUrl || "http://192.168.0.20";
+  document.getElementById("baseUrl").value = cfg.baseUrl || "http://192.168.1.115";
   document.getElementById("authToken").value = cfg.authToken || "";
   // start with White @ 100%
   setPreview("#ffffff", "White");
