@@ -50,7 +50,7 @@
 
       /* Top-3 count badge (added only to those bars in JS) */
       .badge-top{
-        position:absolute;top:-22px;left:50%;transform:translateX(-50%);
+        position:absolute;top:35%;left:50%;transform:translateX(-50%);
         min-width:24px;height:22px;padding:0 8px;border-radius:999px;
         background:#0f1620;border:1px solid #2a3340;color:#cfe2ff;
         font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;
@@ -105,7 +105,7 @@
     <header>
       <h2>#BBD Sign • Crowd Vote</h2>
       <div class="pill">
-        Vote every <b id="cooldownLabel">5s</b> • <span class="total">Total: <span id="totalVotes">0</span></span>
+        Vote every <b id="cooldownLabel">5s</b> • <span class="total">Total Votes: <span id="totalVotes">0</span></span>
       </div>
     </header>
 
@@ -182,44 +182,65 @@
 
       function toast(m){const t=$("#toast");t.textContent=m||"Voted!";t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1800);}
 
-     function renderBar(counts = {}, total = 0, leaderKey = null) {
-  bar.innerHTML = "";
+     
+      function renderBar(counts = {}, total = 0, leaderKey = null) {
+        bar.innerHTML = "";
 
-  // Determine leader if not provided
-  let computedLeader = leaderKey;
-  if (!computedLeader) {
-    let best = -Infinity, bestKey = null;
-    for (const [k, v] of Object.entries(counts)) {
-      const n = Number(v) || 0;
-      if (n > best) { best = n; bestKey = k; }
-    }
-    computedLeader = bestKey;
-  }
-  const leaderUpper = computedLeader ? String(computedLeader).replace("#","").toUpperCase() : null;
+        // Determine leader if not provided
+        let computedLeader = leaderKey;
+        if (!computedLeader) {
+          let best = -Infinity, bestKey = null;
+          for (const [k, v] of Object.entries(counts)) {
+            const n = Number(v) || 0;
+            if (n > best) { best = n; bestKey = k; }
+          }
+          computedLeader = bestKey;
+        }
+        const leaderUpper = computedLeader ? String(computedLeader).replace("#","").toUpperCase() : null;
 
-  PALETTE.forEach((hex) => {
-    const k = hex.slice(1).toUpperCase();
-    const c = Number(counts[k] || 0);
+        // Build a stable list for sorting & rendering
+        const items = PALETTE.map(hex => {
+          const key = hex.slice(1).toUpperCase();
+          const c = Number(counts[key] || 0);
+          return { hex, key, c };
+        });
 
-    const el = document.createElement("div");
-    el.className = "chunk";
-    el.style.background = hex;
-    el.style.flex = String(c); // proportional to count
-    el.title = `${hex} — ${c} vote${c === 1 ? "" : "s"}`;
+        // Find the top 3 non-leader chunks (with >0 votes)
+        const topOthersKeys = items
+          .filter(it => it.key !== leaderUpper && it.c > 0)
+          .sort((a, b) => b.c - a.c)
+          .slice(0, 2)
+          .map(it => it.key);
+        const topOthersSet = new Set(topOthersKeys);
 
-    // Winner visuals: class + single floating crown
-    if (leaderUpper && k === leaderUpper) {
-      el.classList.add("winner");
-      const crown = document.createElement("div");
-      crown.className = "winner-crown";
-      crown.textContent = "👑";
-      el.appendChild(crown);
-    }
+        // Render chunks
+        items.forEach(({ hex, key, c }) => {
+          const el = document.createElement("div");
+          el.className = "chunk";
+          el.style.background = hex;
+          el.style.flex = String(c); // proportional to count
+          el.title = `${hex} — ${c} vote${c === 1 ? "" : "s"}`;
 
-    // No inside labels or percentages; keep the bar clean
-    bar.appendChild(el);
-  });
-}
+          // Winner crown
+          if (leaderUpper && key === leaderUpper) {
+            const crown = document.createElement("div");
+            crown.className = "winner-crown";
+            crown.textContent = "👑";
+            el.appendChild(crown);
+          }
+
+          // Top-3 (non-leader) badge — show the live tally
+          if (topOthersSet.has(key)) {
+            const badge = document.createElement("div");
+            badge.className = "badge-top";
+            badge.textContent = String(c); // just the count (clean!)
+            el.appendChild(badge);
+          }
+
+          bar.appendChild(el);
+        });
+      }
+
 
       onValue(tallyRef,(snap)=>{
         const t=snap.val()||{};
