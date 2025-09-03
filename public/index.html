@@ -56,13 +56,15 @@
         font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;
       }
 
-      /* Winner: clear, shadowless emphasis */
-      .chunk.winner{
-        /* outline:3px solid #ffffff; */
-        transform:scale(1.1);     /* subtle pop without shadows */
-        z-index:2;
-        filter:saturate(1.15) brightness(1.05);
-      }
+.winner-crown{
+  position:absolute;
+  top:30%;
+  left:50%;
+  transform:translateX(-50%);
+  font-size:26px;
+  line-height:1;
+  pointer-events:none;
+}
 
       /* Swatch grid (2 rows × 5 cols) */
       .grid{
@@ -180,63 +182,44 @@
 
       function toast(m){const t=$("#toast");t.textContent=m||"Voted!";t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1800);}
 
-      function renderBar(counts={},total=0,leaderKey=null){
-        bar.innerHTML="";
+     function renderBar(counts = {}, total = 0, leaderKey = null) {
+  bar.innerHTML = "";
 
-        // determine leader if not provided
-        let computedLeader=leaderKey;
-        if(!computedLeader){
-          let best=-Infinity,bestKey=null;
-          for(const[k,v] of Object.entries(counts)){const n=Number(v)||0; if(n>best){best=n;bestKey=k;}}
-          computedLeader=bestKey;
-        }
+  // Determine leader if not provided
+  let computedLeader = leaderKey;
+  if (!computedLeader) {
+    let best = -Infinity, bestKey = null;
+    for (const [k, v] of Object.entries(counts)) {
+      const n = Number(v) || 0;
+      if (n > best) { best = n; bestKey = k; }
+    }
+    computedLeader = bestKey;
+  }
+  const leaderUpper = computedLeader ? String(computedLeader).replace("#","").toUpperCase() : null;
 
-        // figure out top 3 keys by count (non-zero)
-        const top3 = Object.entries(counts)
-          .map(([k,v])=>[String(k).toUpperCase(), Number(v)||0])
-          .sort((a,b)=>b[1]-a[1])
-          .slice(0,3)
-          .filter(([,v])=>v>0)
-          .map(([k])=>k);
-        const top3Set = new Set(top3);
+  PALETTE.forEach((hex) => {
+    const k = hex.slice(1).toUpperCase();
+    const c = Number(counts[k] || 0);
 
-        PALETTE.forEach((hex)=>{
-          const k=hex.slice(1).toUpperCase();
-          const c=Number(counts[k]||0);
-          const pct=total>0 ? Math.round((c/total)*100) : 0;
+    const el = document.createElement("div");
+    el.className = "chunk";
+    el.style.background = hex;
+    el.style.flex = String(c); // proportional to count
+    el.title = `${hex} — ${c} vote${c === 1 ? "" : "s"}`;
 
-          const el=document.createElement("div");
-          el.className="chunk";
-          if(computedLeader && k===String(computedLeader).replace("#","").toUpperCase())
-            el.classList.add("winner");
+    // Winner visuals: class + single floating crown
+    if (leaderUpper && k === leaderUpper) {
+      el.classList.add("winner");
+      const crown = document.createElement("div");
+      crown.className = "winner-crown";
+      crown.textContent = "👑";
+      el.appendChild(crown);
+    }
 
-          el.style.background=hex;
-          el.style.flex=String(c); // proportional to count
-          el.title=`${hex} — ${c} vote${c===1?"":"s"} (${pct}%)`;
-
-          // badge above: ONLY for top 3
-          if (top3Set.has(k)) {
-            const badge=document.createElement("span");
-            badge.className="badge-top";
-            badge.textContent=String(c);
-            el.appendChild(badge);
-          }
-
-          // inside label: conditional visibility
-          const label=document.createElement("div");
-          label.className="label";
-          if(pct >= THRESH_PCT_FOR_COUNT){
-            label.textContent = `${c} • ${pct}%`;
-          } else if (pct >= THRESH_PCT_FOR_PERCENT){
-            label.textContent = `${pct}%`;
-          } else {
-            label.textContent = "";
-          }
-          el.appendChild(label);
-
-          bar.appendChild(el);
-        });
-      }
+    // No inside labels or percentages; keep the bar clean
+    bar.appendChild(el);
+  });
+}
 
       onValue(tallyRef,(snap)=>{
         const t=snap.val()||{};
